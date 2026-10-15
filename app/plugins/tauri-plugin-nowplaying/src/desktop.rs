@@ -315,29 +315,13 @@ mod imp {
 }
 
 // ---------------------------------------------------------------------------
-// Other desktops (Linux): not implemented in the MVP. The app falls back to the
-// Spotify Web API through the server. MPRIS over D-Bus would go here.
+// Linux and the BSDs: MPRIS over the D-Bus session bus (desktop/linux.rs).
+// Tauri's desktop targets are macOS, Windows and these, so this is the rest.
 // ---------------------------------------------------------------------------
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-mod imp {
-    use crate::models::{NowPlayingResponse, PlaybackCapabilities};
-    use crate::Result;
-
-    pub const CAPABILITIES: PlaybackCapabilities =
-        PlaybackCapabilities { transport: false, seek: false, volume: false, events: false };
-
-    pub fn read() -> Result<NowPlayingResponse> {
-        Ok(NowPlayingResponse { track: None })
-    }
-
-    pub fn control(action: &str, _value: Option<f64>) -> Result<()> {
-        Err(super::unsupported(action))
-    }
-
-    pub fn watch(_on_change: impl Fn() + Send + 'static) -> bool {
-        false
-    }
-}
+mod linux;
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+use linux as imp;
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {

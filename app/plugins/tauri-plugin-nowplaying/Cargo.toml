@@ -2,7 +2,7 @@
 name = "tauri-plugin-nowplaying"
 version = "0.3.0"
 edition = "2021"
-description = "Reads the currently playing track from the OS media session (macOS, Windows, Android)."
+description = "Reads the currently playing track from the OS media session (macOS, Windows, Linux, Android)."
 links = "tauri-plugin-nowplaying"
 exclude = ["/android/build", "/android/.gradle"]
 
@@ -24,6 +24,11 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
   "NSOperation",
   "NSString",
 ] }
+
+# Linux and the BSDs: MPRIS over D-Bus. tauri-plugin-opener already pulls in
+# zbus there, with the same version and target list.
+[target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
+zbus = "5.9"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [
