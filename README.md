@@ -37,6 +37,7 @@ Guitarfish runs alongside Spotify. When the song changes, it detects the new tra
 | Song detection | Custom Tauri plugin `tauri-plugin-nowplaying` | Rust on desktop (AppleScript and an `objc2` notification observer on macOS, the `windows` crate's WinRT SMTC bindings on Windows, `zbus` MPRIS on Linux), Kotlin on Android. |
 | External links | `@tauri-apps/plugin-opener` | Opens pages in the system browser (Songsterr on Android, fallbacks). |
 | Notifications | `@tauri-apps/plugin-notification` | System notification when a new release is out. |
+| In-app updates | `tauri-plugin-updater` + `tauri-plugin-process` (desktop only) | Downloads the signed update named in the release's `latest.json`, installs it and relaunches the app. |
 | Server | Node 20+, TypeScript run by `tsx`, [Fastify 5](https://fastify.dev) + `@fastify/cors` | HTTP API: song matching, tab storage, Songsterr search proxy, Spotify OAuth. |
 | Database | SQLite via `better-sqlite3` (WAL mode) | Songs, tabs (stored as BLOBs), confirmed Spotify IDs, Spotify tokens. File at `server/data/tabsync.db`. |
 | External services | Spotify Web API (OAuth Authorization Code + PKCE), Songsterr public search | Optional now-playing fallback; finding Songsterr pages. |
@@ -85,7 +86,7 @@ The app and the server are separate programs. The server can run on the same com
   - `main.ts` wires the modules below to the DOM: the views and all rendering.
   - `sync.ts` (`SyncController`) runs the poll loop and the tab lookup for each new track.
   - `librarysync.ts` (`LibrarySync`) syncs history and favorites with the server through a queue of pending changes.
-  - `update.ts` checks GitHub for a newer release.
+  - `update.ts` checks GitHub for a newer release; `selfupdate.ts` installs it on desktop.
   - `detector.ts` combines the device reading with the Web API fallback, and reads the plugin's capabilities.
   - `api.ts` is the HTTP client. It caches confident lookups in `localStorage` for 7 days.
   - `match.ts` cleans Spotify titles and decides whether a Songsterr result is really the same song.
@@ -153,10 +154,13 @@ The app and the server are separate programs. The server can run on the same com
    - A sync posts the queue to `POST /v1/library/sync` in batches of at most 500 changes per list, then replaces the local lists with the merged lists the server returns, re-applying any change made while the request was out. With nothing queued it just reads `GET /v1/library`.
    - It runs at startup, 2 seconds after local changes, every minute and when the window regains focus. If the server can't be reached the queue is kept for the next attempt (the Tools sidebar shows *Offline, will sync*); a batch the server rejects as malformed (400) is dropped so it can't block the rest.
 8. **Updates.** At startup and every 6 hours, the app fetches the latest published release from the GitHub API (`releases/latest`) and compares it with its own version.
-   - When the release is newer, it shows a system notification and a banner whose *Download* button opens the release page.
+   - When the release is newer, it shows a system notification and a banner.
    - Each version is announced once (`tabsync.update.announced` in `localStorage`).
    - Drafts and pre-releases are ignored. Network errors are silent.
-   - The app does not install updates itself; the release page has the installer for each platform.
+   - **Desktop:** the banner button is *Install and restart*. The Tauri updater reads `latest.json` from the latest release, downloads the update for this platform, checks its signature against the public key in `tauri.conf.json`, installs it (on Windows the installer runs in passive mode) and relaunches the app. The banner shows the download progress.
+   - If that fails, for example because the release has no `latest.json` (releases made before in-app updates) or the signature doesn't match, the release page opens in the browser instead.
+   - **Android:** the banner button is *Download*, which opens the release page with the `.apk`. The updater plugin doesn't support Android.
+   - The rules (which button, progress text, fallback) are in `selfupdate.ts`; `main.ts` only connects them to the plugins.
 
 ## Repository layout
 
@@ -257,6 +261,8 @@ npm run tauri dev          # development (Vite on :1420 + the Rust shell)
 npm run tauri build        # installer: .dmg/.app (macOS), .msi/.exe (Windows), .AppImage/.deb/.rpm (Linux)
 ```
 
+`tauri build` also signs the updater bundles, so it needs `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` in the environment (see [Updater signing](#6-tests-ci-and-releases)). `tauri dev` doesn't.
+
 - **macOS:** the first time Guitarfish reads Spotify, macOS asks permission to control Spotify. If you click "Don't Allow" by mistake, re-enable it in System Settings → Privacy & Security → Automation. In `tauri dev` the prompt names your terminal app instead of Guitarfish.
 - **Windows:** no setup needed. Works with the Spotify desktop installer and the Microsoft Store version. SMTC doesn't expose the Spotify track ID, so Windows matches by artist and title only.
 - **Linux:** no setup needed. Guitarfish reads the Spotify desktop app (`.deb`, Snap or Flatpak) through MPRIS on the D-Bus session bus, including the Spotify track ID. The Spotify web player isn't detected; use the Web API fallback for it.
@@ -327,6 +333,7 @@ The server requests the scopes `user-read-currently-playing` and `user-read-play
   - It only runs when the repository secret `ANTHROPIC_API_KEY` is set, and the [Claude GitHub App](https://github.com/apps/claude) must be installed on the repository.
   - It's the only workflow with write access to pull requests.
 - **Release** (`.github/workflows/release.yml`) first runs CI and Code review on the tagged commit with read-only tokens, and stops if either fails. Then it builds the installable apps and attaches them to a GitHub release: a universal `.dmg` for macOS, `.msi` and `.exe` installers for Windows, an `.AppImage` and a `.deb` for Linux (x86_64), and a universal `.apk` for Android.
+  - It also attaches the signed updater bundles (`Guitarfish_universal.app.tar.gz`, the Windows installers and the Linux packages, each with a `.sig`) and generates `latest.json`, which installed desktop apps read to update themselves. Each desktop job merges its platforms into that file.
   1. Set the new version with `scripts/bump-version.sh 0.3.0`. It updates `tauri.conf.json`, both `Cargo.toml` files, both `package.json` files and all four lockfiles. Commit the result.
   2. Push a matching tag: `git tag v0.3.0 && git push origin v0.3.0`. Every build runs, and the release is published when all succeed.
 
@@ -340,6 +347,11 @@ The server requests the scopes `user-read-currently-playing` and `user-read-play
   - `ANDROID_KEY_PASSWORD`
 
   Without them, each release is signed with a one-off key, so updating needs an uninstall first. Create a keystore once with `keytool -genkeypair -v -keystore release.jks -alias guitarfish -keyalg RSA -keysize 2048 -validity 10000` and keep it safe: losing it means users must reinstall.
+- **Updater signing:** desktop builds sign their updater bundles with these repository secrets:
+  - `TAURI_SIGNING_PRIVATE_KEY` (the contents of the key file made by `npx tauri signer generate -w ~/.tauri/guitarfish-updater.key`)
+  - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+
+  The matching public key is `plugins.updater.pubkey` in `tauri.conf.json`. Keep the private key safe: if it is lost, installed apps can't verify any new update and users have to download the next release by hand (and get an app with a new public key). A local `npm run tauri build` needs the same two variables set, or it stops with a missing private key error.
 - **macOS signing (optional):** the builds are not notarized, so the first launch needs `xattr -cr /Applications/Guitarfish.app`. To sign and notarize, add the `APPLE_*` secrets listed in the workflow and pass them to the Tauri step.
 
 ## Known MVP limitations / next steps

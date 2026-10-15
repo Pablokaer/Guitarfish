@@ -25,6 +25,7 @@ import { syncStatus, type SyncStatus } from "./status";
 import "./styles.css";
 import { pollIntervalFor, SyncController } from "./sync";
 import type { PlaybackCapabilities, Song, SongsterrResult, TabInfo, Track } from "./types";
+import { installUpdate, updateAction, updateNotice } from "./selfupdate";
 import { checkForUpdate, type UpdateInfo } from "./update";
 import { TabViewer, type PlayerStatus } from "./viewer";
 
@@ -1251,20 +1252,38 @@ async function ensurePermission(): Promise<void> {
 }
 
 // ---- Updates ---------------------------------------------------------------------
-/** System notification plus a banner with a link to the release page. */
+/**
+ * System notification plus a banner. On desktop its button installs the update
+ * and restarts (falling back to the release page); elsewhere it opens the page.
+ */
 async function announceUpdate(u: UpdateInfo) {
-  showBanner(`<b>${escapeHtml(u.name)}</b> is available. <button class="btn" type="button" data-update>Download</button>`);
+  const action = updateAction({ tauri: isTauri(), userAgent: navigator.userAgent });
+  const notice = updateNotice(u, action);
+  showBanner(`<b>${escapeHtml(u.name)}</b> is available. <button class="btn" type="button" data-update>${notice.button}</button>`);
   el.banner.querySelector<HTMLButtonElement>("[data-update]")?.addEventListener("click", () => {
     showBanner(null);
-    void openExternal(u.url);
+    if (action === "install") void installInApp(u);
+    else void openExternal(u.url);
   });
   try {
     let granted = await isPermissionGranted();
     if (!granted) granted = (await requestPermission()) === "granted";
-    if (granted) sendNotification({ title: "Guitarfish update available", body: `Version ${u.version} is ready to download.` });
+    if (granted) sendNotification({ title: notice.title, body: notice.body });
   } catch (e) {
     console.warn("update notification failed", e);
   }
+}
+
+/** Thin glue: the updater, relaunch and opener plugins behind selfupdate.installUpdate. */
+async function installInApp(u: UpdateInfo) {
+  const outcome = await installUpdate(u, {
+    check: async () => (await import("@tauri-apps/plugin-updater")).check(),
+    relaunch: async () => (await import("@tauri-apps/plugin-process")).relaunch(),
+    openUrl: openExternal,
+    onStatus: (text) => showBanner(escapeHtml(text)),
+  });
+  if (outcome === "fallback") showBanner(`Couldn't install ${escapeHtml(u.name)} here, so its release page opened in your browser.`, "warn");
+  else if (outcome === "restart-needed") showBanner(`${escapeHtml(u.name)} is installed. Restart Guitarfish to use it.`);
 }
 
 async function checkUpdates() {

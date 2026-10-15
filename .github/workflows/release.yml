@@ -150,24 +150,43 @@ jobs:
       # Code signing is optional: add APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,
       # APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_PASSWORD and APPLE_TEAM_ID as
       # repository secrets and pass them here as env to sign and notarize on macOS.
+      #
+      # In-app updates: the TAURI_SIGNING_* secrets sign the updater bundles
+      # (.app.tar.gz, -setup.exe, .msi, .AppImage, .deb) and write a .sig next to each. Every job
+      # uploads them and merges its platforms into the release's latest.json,
+      # which the app's updater reads (the universal macOS build fills both
+      # darwin-aarch64 and darwin-x86_64). tagName only pins the download URLs in
+      # latest.json to this release; it is empty for build_only, so nothing is
+      # created or uploaded then.
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: app
           tauriScript: npm run tauri
           releaseId: ${{ needs.prepare.outputs.release_id }}
+          tagName: ${{ !inputs.build_only && needs.prepare.outputs.tag || '' }}
           args: ${{ matrix.args }}
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: true
       - if: ${{ inputs.build_only }}
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: |
             app/src-tauri/target/**/release/bundle/dmg/*.dmg
+            app/src-tauri/target/**/release/bundle/macos/*.app.tar.gz
+            app/src-tauri/target/**/release/bundle/macos/*.app.tar.gz.sig
             app/src-tauri/target/**/release/bundle/msi/*.msi
+            app/src-tauri/target/**/release/bundle/msi/*.msi.sig
             app/src-tauri/target/**/release/bundle/nsis/*.exe
+            app/src-tauri/target/**/release/bundle/nsis/*.exe.sig
             app/src-tauri/target/**/release/bundle/appimage/*.AppImage
+            app/src-tauri/target/**/release/bundle/appimage/*.AppImage.sig
             app/src-tauri/target/**/release/bundle/deb/*.deb
+            app/src-tauri/target/**/release/bundle/deb/*.deb.sig
           if-no-files-found: error
 
   android:
@@ -280,7 +299,26 @@ jobs:
     if: github.event_name == 'push' || (inputs.publish && !inputs.build_only)
     runs-on: ubuntu-24.04
     steps:
-      - env:
+      # Each desktop job merges its entry into latest.json on the draft release;
+      # jobs finishing at the same moment can overwrite each other's entry. Don't
+      # publish a release that installed apps couldn't update to on every platform.
+      - name: Check latest.json covers every desktop platform
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
+        run: |
+          asset=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" -q '.[] | select(.name == "latest.json") | .id')
+          [ -n "$asset" ] || { echo "::error::latest.json is missing from the release"; exit 1; }
+          gh api -H "Accept: application/octet-stream" "repos/$GITHUB_REPOSITORY/releases/assets/$asset" > latest.json
+          missing=$(jq -r '[ "darwin-aarch64", "darwin-x86_64", "windows-x86_64", "linux-x86_64" ] - (.platforms | to_entries
+            | map(select(.value.url != "" and .value.signature != "")) | map(.key)) | join(" ")' latest.json)
+          if [ -n "$missing" ]; then
+            echo "::error::latest.json has no signed entry for: $missing. Re-run the failed desktop job(s) to merge them in, then re-run this job."
+            exit 1
+          fi
+          jq -r '.platforms | keys | join(", ")' latest.json
+      - name: Publish
+        env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
         run: gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -F draft=false -f make_latest=true -q .html_url
