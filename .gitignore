@@ -1,10 +1,6 @@
 node_modules/
 dist/
 target/
-*.db
-*.db-shm
-*.db-wal
-server/data/
 app/src-tauri/gen/
 .DS_Store
 app/public/font/

@@ -13,7 +13,7 @@ fi
 cd "$(dirname "$0")/.."
 
 # Every file that records the version: the only list, used to check, edit and stage.
-npm_dirs=(app server)
+npm_dirs=(app)
 tauri_conf=app/src-tauri/tauri.conf.json
 cargo_tomls=(app/src-tauri/Cargo.toml app/plugins/tauri-plugin-nowplaying/Cargo.toml)
 cargo_locks=(app/src-tauri/Cargo.lock app/plugins/tauri-plugin-nowplaying/Cargo.lock)

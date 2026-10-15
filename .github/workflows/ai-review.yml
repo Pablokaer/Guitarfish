@@ -55,7 +55,7 @@ jobs:
 
             Review this pull request for correctness bugs, security issues and
             platform-specific breakage (macOS AppleScript, Windows SMTC, Android
-            Kotlin plugin, the Fastify server and the TypeScript UI). Skip style
+            Kotlin plugin, the Rust app shell and the TypeScript UI). Skip style
             nits: rustfmt, clippy and tsc already run in CI.
 
             Use inline comments for specific lines, and don't repeat an inline

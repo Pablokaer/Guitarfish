@@ -42,9 +42,6 @@ jobs:
         with:
           node-version: 22
       # Runtime dependencies only; fails on high or critical advisories.
-      - name: Server
-        working-directory: server
-        run: npm audit --omit=dev --audit-level=high
       - name: App
         working-directory: app
         run: npm audit --omit=dev --audit-level=high
