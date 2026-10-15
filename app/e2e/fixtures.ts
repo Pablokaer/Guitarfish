@@ -1,8 +1,8 @@
-import { test as base, expect, type Page, type Request, type Route } from "@playwright/test";
-import type { LookupResponse, Song, SongsterrResult, Track } from "../src/types";
-
-/** Where the app looks for the server unless the settings say otherwise. */
-export const DEFAULT_SERVER = "http://127.0.0.1:8787";
+import { test as base, expect, type Page } from "@playwright/test";
+import { buildSync } from "esbuild";
+import { fileURLToPath } from "node:url";
+import type { SongsterrResult, Track } from "../src/types";
+import type { SeedTab } from "./tauri-mock";
 
 /** A tiny alphaTex tab: two bars of open strings. */
 export const TINY_TAB = `\\title "E2E tab"
@@ -21,164 +21,124 @@ export function track(over: Partial<Track> & Pick<Track, "title" | "artist">): T
     isPlaying: true,
     spotifyId: null,
     artworkUrl: null,
-    source: "spotify-api",
-    player: "Spotify Web API",
+    source: "os",
+    player: "Spotify",
     ...over,
   };
 }
 
-export function song(id: number, title: string, artist: string, tabIds: number[] = [id * 100]): Song {
-  return {
-    id,
-    title,
-    artist,
-    durationMs: 200_000,
-    tabs: tabIds.map((t) => ({ id: t, instrument: "guitar", tuning: null, format: "alphatex", version: 1, rating: null, isPlaceholder: false })),
-  };
-}
+const tab = (title: string, artist: string, over: Partial<SeedTab> = {}): SeedTab => ({
+  title,
+  artist,
+  name: `${title}.alphatex`,
+  format: "alphatex",
+  text: TINY_TAB,
+  ...over,
+});
 
 export const WONDERWALL = track({ title: "Wonderwall", artist: "Oasis", spotifyId: "sp-wonderwall" });
 export const UNKNOWN = track({ title: "Obscure Demo", artist: "Nobody Band", spotifyId: "sp-obscure", positionMs: 10_000 });
-export const CATALOGUE: Song[] = [song(1, "Wonderwall", "Oasis"), song(2, "Obscure Demo (Live)", "Nobody Band"), song(3, "Champagne Supernova", "Oasis")];
+/** The tabs on the device at the start of each test (see FakeTauri.seed). */
+export const CATALOGUE: SeedTab[] = [
+  tab("Wonderwall", "Oasis"),
+  // Close to UNKNOWN, but not close enough to open on its own (73%).
+  tab("Obscure Demo Sessions", "Nobody Band"),
+  tab("Champagne Supernova", "Oasis"),
+];
 export const SONGSTERR: SongsterrResult[] = [
-  { songId: 11, title: "Wonderwall", artist: "Oasis", instruments: ["Guitar"], url: "https://www.songsterr.com/a/wsa/oasis-wonderwall-tab-s11" },
-  { songId: 12, title: "Champagne Supernova", artist: "Oasis", instruments: ["Guitar"], url: "https://www.songsterr.com/a/wsa/oasis-champagne-supernova-tab-s12" },
+  { songId: 11, title: "Wonderwall", artist: "Oasis", instruments: ["Guitar"], url: "https://www.songsterr.com/a/wa/song?id=11" },
+  { songId: 12, title: "Champagne Supernova", artist: "Oasis", instruments: ["Guitar"], url: "https://www.songsterr.com/a/wa/song?id=12" },
 ];
 
-type Entry = { url: string; songId: number; title: string; artist: string; at: number };
-type Tombstone = { songId: number; deletedAt: number };
+/** Settings that show the local (alphaTab) viewer instead of the Songsterr page. */
+export const LOCAL_VIEW = { "tabsync.settings": { version: 2, songsterrPanel: false } };
 
 export interface Call {
-  method: string;
-  path: string;
-  query: URLSearchParams;
-  body: unknown;
+  cmd: string;
+  args: Record<string, unknown>;
 }
+
+/** tauri-mock.ts, bundled once per worker for the browser. */
+const MOCK_SCRIPT = buildSync({
+  entryPoints: [fileURLToPath(new URL("./tauri-mock.ts", import.meta.url))],
+  bundle: true,
+  write: false,
+  format: "iife",
+  platform: "browser",
+  target: "es2022",
+  logLevel: "error",
+}).outputFiles[0].text;
 
 /**
- * A scripted Guitarfish server (and, through it, Spotify) answering the app's
- * requests to `baseUrl`. Tests change `nowPlaying` to "change the song", flip
- * `down` to make the tab endpoints fail, and read `calls` to see what was asked.
+ * The Tauri side of the app, scripted by the test: the now-playing plugin, the
+ * songsterr_search command, the opener and the native webview plumbing. Tests set
+ * `nowPlaying` to "change the song", flip `songsterrDown` to make the Songsterr
+ * search fail, and read `calls` to see what the app asked for.
  */
-export class FakeServer {
+export class FakeTauri {
   nowPlaying: Track | null = null;
-  catalogue: Song[] = [...CATALOGUE];
   songsterr: SongsterrResult[] = [...SONGSTERR];
-  tabText = TINY_TAB;
-  /** The tab endpoints (lookup, search, songs, tabs) fail; Spotify still answers. */
-  down = false;
-  /** Every request fails, as if nothing listened on the port. */
-  offline = false;
-  spotify = { configured: true, connected: true };
+  songsterrDown = false;
+  capabilities = { transport: true, seek: true, volume: false, events: false };
+  /** The tabs on the device when the test's page first loads. */
+  seed: SeedTab[] = [...CATALOGUE];
   calls: Call[] = [];
-  private library: Record<"history" | "favorites", Entry[]> = { history: [], favorites: [] };
-
-  constructor(readonly baseUrl = DEFAULT_SERVER) {}
 
   async install(page: Page): Promise<void> {
-    await page.route(`${this.baseUrl}/**`, (route) => this.handle(route));
+    await page.exposeFunction("__e2eInvoke", (cmd: string, args: Record<string, unknown>) => this.handle(cmd, args));
+    await page.addInitScript((seed) => (window.__e2eSeed = seed), this.seed);
+    await page.addInitScript({ content: MOCK_SCRIPT });
   }
 
-  /** Calls to `path` (exact, without query), optionally only those with `method`. */
-  callsTo(path: string, method?: string): Call[] {
-    return this.calls.filter((c) => c.path === path && (!method || c.method === method));
+  callsTo(cmd: string): Call[] {
+    return this.calls.filter((c) => c.cmd === cmd);
   }
 
-  private async handle(route: Route): Promise<void> {
-    const req = route.request();
-    if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: cors() });
-    const url = new URL(req.url());
-    const call: Call = { method: req.method(), path: url.pathname, query: url.searchParams, body: parseBody(req) };
-    this.calls.push(call);
-    if (this.offline) return route.abort("connectionrefused");
-
-    const json = (body: unknown, status = 200) => route.fulfill({ status, headers: cors(), contentType: "application/json", body: JSON.stringify(body) });
-    const p = url.pathname;
-    const q = url.searchParams;
-
-    if (p === "/health") return json({ ok: true });
-    if (p === "/auth/spotify/status") return json(this.spotify);
-    if (p === "/v1/spotify/now-playing") return json({ track: this.nowPlaying });
-    if (p === "/v1/library" || p === "/v1/library/sync") return json(this.syncLibrary(call.body));
-
-    if (this.down) return route.abort("connectionrefused");
-    if (p === "/v1/tabs/lookup") return json(this.lookup(q.get("title") ?? "", q.get("artist") ?? "", q.get("spotifyId")));
-    if (p === "/v1/songs") return json({ results: this.searchCatalogue(q.get("q") ?? "") });
-    if (p === "/v1/songsterr/search") return json({ results: this.searchSongsterr(q.get("q") ?? "") });
-    const ext = p.match(/^\/v1\/songs\/(\d+)\/external-ids$/);
-    if (ext && req.method() === "POST") return json({ ok: true }, 201);
-    const tab = p.match(/^\/v1\/tabs\/(\d+)\/content$/);
-    if (tab) {
-      return route.fulfill({
-        status: 200,
-        headers: { ...cors(), "X-Tab-Format": "alphatex", "Access-Control-Expose-Headers": "X-Tab-Format" },
-        contentType: "text/plain; charset=utf-8",
-        body: this.tabText,
-      });
-    }
-    return json({ error: "not found" }, 404);
+  /** URLs the app opened in a native Songsterr webview. */
+  embedded(): string[] {
+    return this.callsTo("plugin:webview|create_webview").map((c) => String((c.args.options as { url: string }).url));
   }
 
-  private lookup(title: string, artist: string, spotifyId: string | null): LookupResponse {
-    void spotifyId;
-    const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
-    const match = this.catalogue.find((s) => same(s.title, title) && same(s.artist, artist)) ?? null;
-    if (match) return { match, confidence: 1, method: "exact", candidates: [match] };
-    const candidates = this.catalogue.filter((s) => same(s.artist, artist)).map((s) => ({ ...s, score: 0.72 }));
-    return { match: null, confidence: 0, method: "none", candidates };
-  }
-
-  private searchCatalogue(q: string): Song[] {
-    const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-    return this.catalogue.filter((s) => words.some((w) => `${s.artist} ${s.title}`.toLowerCase().includes(w)));
-  }
-
-  private searchSongsterr(q: string): SongsterrResult[] {
-    const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-    return this.songsterr.filter((r) => words.some((w) => `${r.artist} ${r.title}`.toLowerCase().includes(w)));
-  }
-
-  /** Same contract as the real server: apply entries and removals, reply with the live lists. */
-  private syncLibrary(body: unknown): Record<"history" | "favorites", Entry[]> {
-    const changes = (body && typeof body === "object" ? body : {}) as Partial<Record<"history" | "favorites", (Entry | Tombstone)[]>>;
-    for (const list of ["history", "favorites"] as const) {
-      for (const c of changes[list] ?? []) {
-        const rest = this.library[list].filter((e) => e.songId !== c.songId);
-        this.library[list] = "deletedAt" in c ? rest : [c, ...rest];
+  private handle(cmd: string, args: Record<string, unknown>): unknown {
+    this.calls.push({ cmd, args });
+    switch (cmd) {
+      case "plugin:nowplaying|get_now_playing":
+        return { track: this.nowPlaying };
+      case "plugin:nowplaying|get_capabilities":
+        return this.capabilities;
+      case "plugin:nowplaying|check_permission":
+        return { granted: true };
+      case "songsterr_search": {
+        // The real command rejects with a message (offline, timeout, HTTP error).
+        if (this.songsterrDown) throw new Error("Songsterr search failed: io: Connection refused");
+        const words = String(args.query).toLowerCase().split(/\s+/).filter(Boolean);
+        return this.songsterr.filter((r) => words.some((w) => `${r.artist} ${r.title}`.toLowerCase().includes(w)));
       }
+      case "plugin:app|version":
+        return "0.4.0";
+      default:
+        // Player controls, the opener, and the native webview/window plumbing.
+        return null;
     }
-    return { history: [...this.library.history], favorites: [...this.library.favorites] };
   }
 }
 
-function cors(): Record<string, string> {
-  return {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
-  };
-}
-
-function parseBody(req: Request): unknown {
-  try {
-    return req.postDataJSON();
-  } catch {
-    return req.postData();
-  }
-}
-
-export const test = base.extend<{ server: FakeServer }>({
-  server: async ({ page }, use) => {
-    const server = new FakeServer();
-    await server.install(page);
-    await use(server);
+export const test = base.extend<{ tauri: FakeTauri }>({
+  tauri: async ({ page }, use) => {
+    // The update check asks GitHub for the latest release; never hit the network.
+    await page.route("https://api.github.com/**", (route) => route.fulfill({ status: 404, body: "{}" }));
+    await use(new FakeTauri());
   },
 });
 
 export { expect };
 
-/** Opens the app with `localStorage` seeded (only before the first load of this page). */
-export async function openApp(page: Page, storage: Record<string, unknown> = {}): Promise<void> {
+/**
+ * Opens the app with `localStorage` seeded (only before the first load of this
+ * page). With `tauri` null, the UI runs as in a plain browser, without the mocks.
+ */
+export async function openApp(page: Page, tauri: FakeTauri | null, storage: Record<string, unknown> = {}): Promise<void> {
+  if (tauri) await tauri.install(page);
   if (Object.keys(storage).length) {
     await page.addInitScript((items) => {
       if (sessionStorage.getItem("e2e.seeded")) return;

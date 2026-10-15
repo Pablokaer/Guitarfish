@@ -1,7 +1,7 @@
 import { expect, openApp, test } from "./fixtures";
 
-test("sidebars hide and show, and the layout persists across reloads", async ({ page }) => {
-  await openApp(page);
+test("sidebars hide and show, and the layout persists across reloads", async ({ page, tauri }) => {
+  await openApp(page, tauri);
   const nav = page.locator("#nav");
   const tools = page.locator("#tools");
   await expect(nav).toHaveAttribute("data-state", "expanded");
@@ -26,8 +26,8 @@ test("sidebars hide and show, and the layout persists across reloads", async ({ 
   await expect(tools).toHaveAttribute("data-visible", "true");
 });
 
-test("Focus Mode hides everything, survives a reload, and Esc exits it", async ({ page }) => {
-  await openApp(page);
+test("Focus Mode hides everything, survives a reload, and Esc exits it", async ({ page, tauri }) => {
+  await openApp(page, tauri);
   // Start from a customised layout, which Focus Mode must give back.
   await page.getByRole("button", { name: "Collapse player" }).click();
   await expect(page.locator("#player")).toHaveAttribute("data-state", "collapsed");
