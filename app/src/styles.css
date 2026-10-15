@@ -273,6 +273,7 @@ kbd { display: inline-block; min-width: 18px; padding: 1px 5px; border-radius: 4
 .banner { flex: none; display: flex; align-items: center; gap: 10px; padding: 7px 14px; font-size: 12.5px; border-bottom: 1px solid var(--border); background: var(--elevated); }
 .banner.warn { background: #2a2312; color: #ffd68f; border-bottom-color: #4a3c1b; }
 .banner code { background: #0006; padding: 1px 5px; border-radius: 4px; }
+.banner .btn { margin-left: 8px; padding: 2px 10px; font-size: 12px; }
 .banner .banner-close { margin-left: auto; color: inherit; opacity: 0.7; }
 
 .stage { position: relative; flex: 1; min-height: 0; min-width: 0; }

@@ -35,6 +35,7 @@ Guitarfish runs alongside Spotify. When the song changes, it detects the new tra
 | Tab rendering | [alphaTab](https://alphatab.net) (`@coderline/alphatab` + its Vite plugin) | Renders alphaTex, Guitar Pro 3–7 and MusicXML; Guitarfish adds bar-follow on top. |
 | Song detection | Custom Tauri plugin `tauri-plugin-nowplaying` | Rust on desktop (AppleScript on macOS, the `windows` crate's WinRT SMTC bindings on Windows), Kotlin on Android. |
 | External links | `@tauri-apps/plugin-opener` | Opens pages in the system browser (Songsterr on Android, fallbacks). |
+| Notifications | `@tauri-apps/plugin-notification` | System notification when a new release is out. |
 | Server | Node 20+, TypeScript run by `tsx`, [Fastify 5](https://fastify.dev) + `@fastify/cors` | HTTP API: song matching, tab storage, Songsterr search proxy, Spotify OAuth. |
 | Database | SQLite via `better-sqlite3` (WAL mode) | Songs, tabs (stored as BLOBs), confirmed Spotify IDs, Spotify tokens. File at `server/data/tabsync.db`. |
 | External services | Spotify Web API (OAuth Authorization Code + PKCE), Songsterr public search | Optional now-playing fallback; finding Songsterr pages. |
@@ -78,6 +79,7 @@ The app and the server are separate programs. The server can run on the same com
   - On Android, a `NotificationListenerService` gives the app the right to list other apps' media sessions; the plugin then reads Spotify's (`com.spotify.music`) metadata and playback state.
 - **UI** (`app/src`), plain TypeScript modules:
   - `main.ts` holds the 1-second poll loop, the views and all rendering.
+  - `update.ts` checks GitHub for a newer release.
   - `detector.ts` combines the device reading with the Web API fallback.
   - `api.ts` is the HTTP client. It caches confident lookups in `localStorage` for 7 days.
   - `match.ts` cleans Spotify titles and decides whether a Songsterr result is really the same song.
@@ -124,6 +126,11 @@ The app and the server are separate programs. The server can run on the same com
    - **Songsterr view** (desktop default): Songsterr refuses iframes, so the page opens in a native child webview laid over the viewer area. Moving or resizing panels only repositions that webview; it never reloads the page.
    - **Local view:** alphaTab renders the tab. **Follow** builds a timeline of bar start times from the tab's time signatures and tempo, finds the bar at the current song position (plus your offset), highlights it and scrolls it into the upper third of the view.
 6. **Control** (desktop): the Spotify player strip shows artwork, progress and volume. It drives Spotify through `plugin:nowplaying|control`: AppleScript on macOS (transport, seek, volume) and SMTC on Windows (transport and seek; SMTC has no volume control).
+7. **Updates.** At startup and every 6 hours, the app fetches the latest published release from the GitHub API (`releases/latest`) and compares it with its own version.
+   - When the release is newer, it shows a system notification and a banner whose *Download* button opens the release page.
+   - Each version is announced once (`tabsync.update.announced` in `localStorage`).
+   - Drafts and pre-releases are ignored. Network errors are silent.
+   - The app does not install updates itself; the release page has the installer for each platform.
 
 ## Repository layout
 

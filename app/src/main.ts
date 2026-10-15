@@ -1,5 +1,7 @@
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { clearCachedLookup, TabApi, trackKey } from "./api";
 import { Detector } from "./detector";
@@ -20,10 +22,13 @@ import { loadSettings, saveSettings } from "./settings";
 import { syncStatus, type SearchPhase, type SyncStatus } from "./status";
 import "./styles.css";
 import type { PlaybackCapabilities, Song, SongsterrResult, TabInfo, Track } from "./types";
+import { checkForUpdate, type UpdateInfo } from "./update";
 import { TabViewer } from "./viewer";
 
 const POLL_MS = 1000;
 const RETRY_MS = 5000;
+/** How often a running app looks for a new release (also checked at startup). */
+const UPDATE_CHECK_MS = 6 * 60 * 60 * 1000;
 /** A little longer than the CSS panel transitions (--t). */
 const LAYOUT_ANIM_MS = 260;
 
@@ -1216,6 +1221,29 @@ async function ensurePermission(): Promise<void> {
   });
 }
 
+// ---- Updates ---------------------------------------------------------------------
+/** System notification plus a banner with a link to the release page. */
+async function announceUpdate(u: UpdateInfo) {
+  showBanner(`<b>${escapeHtml(u.name)}</b> is available. <button class="btn" type="button" data-update>Download</button>`);
+  el.banner.querySelector<HTMLButtonElement>("[data-update]")?.addEventListener("click", () => {
+    showBanner(null);
+    void openExternal(u.url);
+  });
+  try {
+    let granted = await isPermissionGranted();
+    if (!granted) granted = (await requestPermission()) === "granted";
+    if (granted) sendNotification({ title: "Guitarfish update available", body: `Version ${u.version} is ready to download.` });
+  } catch (e) {
+    console.warn("update notification failed", e);
+  }
+}
+
+async function checkUpdates() {
+  if (!isTauri()) return;
+  const u = await checkForUpdate({ currentVersion: await getVersion() });
+  if (u) await announceUpdate(u);
+}
+
 // ---- Boot ------------------------------------------------------------------------
 async function main() {
   applyTheme();
@@ -1236,6 +1264,8 @@ async function main() {
   await ensurePermission();
   await poll();
   setInterval(() => void poll(), POLL_MS);
+  void checkUpdates();
+  setInterval(() => void checkUpdates(), UPDATE_CHECK_MS);
 }
 
 void main();
