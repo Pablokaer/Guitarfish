@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Sets the Guitarfish version everywhere it is recorded, lockfiles included:
 #   scripts/bump-version.sh 0.3.0
-# Then commit, and tag the commit `v<version>` to release it (see README).
+# The changed files are staged; commit them (nothing else), then tag the commit
+# `v<version>` to release it (see README).
 set -euo pipefail
 
 version="${1:-}"
@@ -43,5 +44,13 @@ for lock in app/src-tauri/Cargo.lock app/plugins/tauri-plugin-nowplaying/Cargo.l
   ' "$lock" "$version"
 done
 
-git --no-pager diff --stat
-echo "Version set to $version."
+# Stage exactly the files above, so a version commit never picks up anything else.
+files=(
+  app/package.json app/package-lock.json server/package.json server/package-lock.json
+  app/src-tauri/tauri.conf.json
+  app/src-tauri/Cargo.toml app/plugins/tauri-plugin-nowplaying/Cargo.toml
+  app/src-tauri/Cargo.lock app/plugins/tauri-plugin-nowplaying/Cargo.lock
+)
+git add -- "${files[@]}"
+git --no-pager diff --cached --stat
+echo "Version set to $version and staged. Commit with: git commit -m \"Version $version\""

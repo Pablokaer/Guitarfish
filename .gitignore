@@ -13,4 +13,6 @@ app/public/soundfont/
 .idea/
 app/test-results/
 app/playwright-report/
-.claude/
+# Claude Code: agent worktrees and personal settings (shared .claude/ config can be committed).
+/.claude/worktrees/
+.claude/settings.local.json

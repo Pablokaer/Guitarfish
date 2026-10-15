@@ -334,7 +334,7 @@ The server requests the scopes `user-read-currently-playing` and `user-read-play
   - It's the only workflow with write access to pull requests.
 - **Release** (`.github/workflows/release.yml`) first runs CI and Code review on the tagged commit with read-only tokens, and stops if either fails. Then it builds the installable apps and attaches them to a GitHub release: a universal `.dmg` for macOS, `.msi` and `.exe` installers for Windows, an `.AppImage` and a `.deb` for Linux (x86_64), and a universal `.apk` for Android.
   - It also attaches the signed updater bundles (`Guitarfish_universal.app.tar.gz`, the Windows installers and the Linux packages, each with a `.sig`) and generates `latest.json`, which installed desktop apps read to update themselves. Each desktop job merges its platforms into that file.
-  1. Set the new version with `scripts/bump-version.sh 0.3.0`. It updates `tauri.conf.json`, both `Cargo.toml` files, both `package.json` files and all four lockfiles. Commit the result.
+  1. Set the new version with `scripts/bump-version.sh 0.3.0`. It updates and stages `tauri.conf.json`, both `Cargo.toml` files, both `package.json` files and all four lockfiles. Commit them with `git commit` (not `git commit -a` or `git add -A`).
   2. Push a matching tag: `git tag v0.3.0 && git push origin v0.3.0`. Every build runs, and the release is published when all succeed.
 
   You can also run *Release* by hand from the Actions tab:
