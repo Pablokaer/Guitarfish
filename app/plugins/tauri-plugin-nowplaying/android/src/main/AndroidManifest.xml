@@ -9,7 +9,7 @@
         -->
         <service
             android:name="com.tabsync.nowplaying.NowPlayingListenerService"
-            android:label="TabSync now playing"
+            android:label="Guitarfish now playing"
             android:exported="true"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
             <intent-filter>

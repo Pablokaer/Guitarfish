@@ -91,7 +91,7 @@ jobs:
           else
             id=$(gh api "repos/$GITHUB_REPOSITORY/releases" \
               -f tag_name="$TAG" -f target_commitish="$GITHUB_SHA" \
-              -f name="TabSync $VERSION" -F draft=true \
+              -f name="Guitarfish $VERSION" -F draft=true \
               -F body=@.github/release-notes.md -q .id)
             echo "Created draft release $id"
           fi
@@ -190,7 +190,7 @@ jobs:
       - name: Generate the Android project
         working-directory: app
         run: npx tauri android init --ci
-      # The app talks to the TabSync server over plain HTTP on the LAN, which
+      # The app talks to the Guitarfish server over plain HTTP on the LAN, which
       # Android release builds block by default.
       - name: Allow cleartext HTTP to the tab server
         working-directory: app/src-tauri/gen/android
@@ -224,15 +224,15 @@ jobs:
           else
             echo "::warning::ANDROID_KEYSTORE_BASE64 is not set: signing with a one-off key. Installs work, but updating to the next release needs an uninstall first. See README → Releases."
             export KS_PASS=ci-temporary KEY_PASS=ci-temporary
-            alias=tabsync
+            alias=guitarfish
             keytool -genkeypair -keystore "$RUNNER_TEMP/release.jks" -storepass "$KS_PASS" -keypass "$KEY_PASS" \
-              -alias "$alias" -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=TabSync CI"
+              -alias "$alias" -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Guitarfish CI"
           fi
           "$bt/zipalign" -p -f 4 "$apk" "$RUNNER_TEMP/aligned.apk"
           mkdir -p dist-android
           "$bt/apksigner" sign --ks "$RUNNER_TEMP/release.jks" --ks-pass env:KS_PASS --ks-key-alias "$alias" \
-            --key-pass env:KEY_PASS --out "dist-android/TabSync_${VERSION}_android_universal.apk" "$RUNNER_TEMP/aligned.apk"
-          "$bt/apksigner" verify "dist-android/TabSync_${VERSION}_android_universal.apk"
+            --key-pass env:KEY_PASS --out "dist-android/Guitarfish_${VERSION}_android_universal.apk" "$RUNNER_TEMP/aligned.apk"
+          "$bt/apksigner" verify "dist-android/Guitarfish_${VERSION}_android_universal.apk"
           rm -f "$RUNNER_TEMP/release.jks"
       - if: ${{ inputs.build_only }}
         uses: actions/upload-artifact@v7

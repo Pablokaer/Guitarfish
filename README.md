@@ -1,6 +1,8 @@
-# TabSync
+<p align="center"><img src="assets/logo.png" alt="Guitarfish logo" width="160" /></p>
 
-TabSync runs alongside Spotify. When the song changes, it detects the new track, finds a guitar tab for it and shows it: either the song's page on [Songsterr](https://www.songsterr.com) (desktop) or a tab from your own catalogue, rendered locally and scrolled in time with the song.
+# Guitarfish
+
+Guitarfish runs alongside Spotify. When the song changes, it detects the new track, finds a guitar tab for it and shows it: either the song's page on [Songsterr](https://www.songsterr.com) (desktop) or a tab from your own catalogue, rendered locally and scrolled in time with the song.
 
 | Platform | How it detects the song | Status |
 |---|---|---|
@@ -30,7 +32,7 @@ TabSync runs alongside Spotify. When the song changes, it detects the new track,
 |---|---|---|
 | App shell | [Tauri 2](https://v2.tauri.app) (Rust) | Native window, menus, IPC between the UI and native code, installers for macOS / Windows / Android. The `unstable` feature enables the child webviews used for Songsterr. |
 | App UI | TypeScript + [Vite 7](https://vite.dev), no UI framework | Plain DOM code: detector loop, layout, sidebars, Spotify player, settings. |
-| Tab rendering | [alphaTab](https://alphatab.net) (`@coderline/alphatab` + its Vite plugin) | Renders alphaTex, Guitar Pro 3–7 and MusicXML; TabSync adds bar-follow on top. |
+| Tab rendering | [alphaTab](https://alphatab.net) (`@coderline/alphatab` + its Vite plugin) | Renders alphaTex, Guitar Pro 3–7 and MusicXML; Guitarfish adds bar-follow on top. |
 | Song detection | Custom Tauri plugin `tauri-plugin-nowplaying` | Rust on desktop (AppleScript on macOS, the `windows` crate's WinRT SMTC bindings on Windows), Kotlin on Android. |
 | External links | `@tauri-apps/plugin-opener` | Opens pages in the system browser (Songsterr on Android, fallbacks). |
 | Server | Node 20+, TypeScript run by `tsx`, [Fastify 5](https://fastify.dev) + `@fastify/cors` | HTTP API: song matching, tab storage, Songsterr search proxy, Spotify OAuth. |
@@ -42,7 +44,7 @@ TabSync runs alongside Spotify. When the song changes, it detects the new track,
 ## Architecture
 
 ```
-┌───────────────────────── TabSync app (Tauri 2) ─────────────────────────┐
+┌───────────────────────── Guitarfish app (Tauri 2) ─────────────────────────┐
 │                                                                          │
 │  Webview (TypeScript UI)                     Rust core                   │
 │  ┌───────────────────────────┐   invoke()   ┌──────────────────────────┐ │
@@ -56,7 +58,7 @@ TabSync runs alongside Spotify. When the song changes, it detects the new track,
 └────────────────┼─────────────────────────────────────────────────────────┘
                  │ HTTP (fetch)
                  ▼
-┌──────────────── TabSync server (Node + Fastify) ────────────────┐
+┌──────────────── Guitarfish server (Node + Fastify) ────────────────┐
 │ app.ts       routes            matching.ts  ID → exact → fuzzy  │──▶ songsterr.com/api/songs
 │ db.ts        SQLite            normalize.ts title/artist rules  │──▶ api.spotify.com (fallback)
 └─────────────────────────────────────────────────────────────────┘
@@ -126,7 +128,7 @@ The app and the server are separate programs. The server can run on the same com
 ## Repository layout
 
 ```
-tabsync/
+guitarfish/
 ├── server/                         Tab lookup API (Node + TypeScript + Fastify + SQLite)
 │   ├── src/index.ts                entry point, environment variables
 │   ├── src/app.ts                  HTTP routes
@@ -141,13 +143,25 @@ tabsync/
 ├── app/                            Tauri 2 app (desktop + Android)
 │   ├── index.html, src/            UI (TypeScript + Vite), see "The app" above
 │   ├── test/                       vitest tests for the pure UI modules
+│   ├── public/logo.png             logo (favicon and sidebar brand mark)
 │   ├── src-tauri/                  Rust shell, tauri.conf.json, capabilities, icons
 │   └── plugins/tauri-plugin-nowplaying/
 │       ├── src/desktop.rs          macOS (AppleScript) + Windows (SMTC) detectors and controls
 │       ├── src/mobile.rs           bridge to the Kotlin plugin
 │       └── android/                Kotlin plugin + NotificationListenerService
-└── .github/workflows/              ci.yml, release.yml
+├── assets/                         logo.png (project logo), logo-1024.png (desktop icon source),
+│                                   android-icon.png (Android icon source)
+├── scripts/bump-version.sh         sets the version in every manifest and lockfile
+└── .github/workflows/              ci.yml, code-review.yml, ai-review.yml, release.yml
 ```
+
+### Icons
+
+- **Desktop** (`app/src-tauri/icons/`, everything except `android/`): generated from `assets/logo-1024.png` with `cd app && npx tauri icon ../assets/logo-1024.png`. The favicon and sidebar logo are `app/public/logo.png`.
+- **Android** (`app/src-tauri/icons/android/`): generated from `assets/android-icon.png` with `npx tauri icon ... -o <tmp>`, copying only its `android/` folder.
+  - The adaptive-icon foregrounds were then redrawn so the pick fits inside the launcher's safe zone (58% of the canvas).
+  - The background color is `#051426`, set in `values/ic_launcher_background.xml`.
+  - Running `tauri icon` with the desktop logo overwrites `android/`, so keep or restore that folder.
 
 ## 1. Run the server
 
@@ -200,7 +214,7 @@ npm run tauri dev          # development (Vite on :1420 + the Rust shell)
 npm run tauri build        # installer: .dmg/.app (macOS), .msi/.exe (Windows)
 ```
 
-- **macOS:** the first time TabSync reads Spotify, macOS asks permission to control Spotify. If you click "Don't Allow" by mistake, re-enable it in System Settings → Privacy & Security → Automation. In `tauri dev` the prompt names your terminal app instead of TabSync.
+- **macOS:** the first time Guitarfish reads Spotify, macOS asks permission to control Spotify. If you click "Don't Allow" by mistake, re-enable it in System Settings → Privacy & Security → Automation. In `tauri dev` the prompt names your terminal app instead of Guitarfish.
 - **Windows:** no setup needed. Works with the Spotify desktop installer and the Microsoft Store version. SMTC doesn't expose the Spotify track ID, so Windows matches by artist and title only.
 - In the **Tools** sidebar, the server URL defaults to `http://127.0.0.1:8787`.
 
@@ -215,10 +229,10 @@ npm run tauri android dev  # device or emulator
 npm run tauri android build
 ```
 
-- On first launch, the app opens **Notification access**. Turn on *TabSync*, then go back to the app. Android only shares other apps' media sessions with apps that have this access.
+- On first launch, the app opens **Notification access**. Turn on *Guitarfish*, then go back to the app. Android only shares other apps' media sessions with apps that have this access.
 - In Settings, set the server URL to your computer's LAN IP (e.g. `http://192.168.1.20:8787`). The emulator uses `http://10.0.2.2:8787`, which is the default there.
 - Release builds block plain HTTP by default. Either serve the API over HTTPS, or allow cleartext traffic for your server in the generated Android manifest. The release workflow already does the latter.
-- To use it alongside Spotify, run TabSync in split-screen or as the foreground app. Spotify keeps playing in the background.
+- To use it alongside Spotify, run Guitarfish in split-screen or as the foreground app. Spotify keeps playing in the background.
 - Android has no playback controls yet, and Songsterr opens in the browser because child webviews are desktop-only.
 
 ## 4. Spotify Web API fallback (optional)
@@ -278,8 +292,8 @@ The server requests the scopes `user-read-currently-playing` and `user-read-play
   - `ANDROID_KEY_ALIAS`
   - `ANDROID_KEY_PASSWORD`
 
-  Without them, each release is signed with a one-off key, so updating needs an uninstall first. Create a keystore once with `keytool -genkeypair -v -keystore release.jks -alias tabsync -keyalg RSA -keysize 2048 -validity 10000` and keep it safe: losing it means users must reinstall.
-- **macOS signing (optional):** the builds are not notarized, so the first launch needs `xattr -cr /Applications/TabSync.app`. To sign and notarize, add the `APPLE_*` secrets listed in the workflow and pass them to the Tauri step.
+  Without them, each release is signed with a one-off key, so updating needs an uninstall first. Create a keystore once with `keytool -genkeypair -v -keystore release.jks -alias guitarfish -keyalg RSA -keysize 2048 -validity 10000` and keep it safe: losing it means users must reinstall.
+- **macOS signing (optional):** the builds are not notarized, so the first launch needs `xattr -cr /Applications/Guitarfish.app`. To sign and notarize, add the `APPLE_*` secrets listed in the workflow and pass them to the Tauri step.
 
 ## Known MVP limitations / next steps
 

@@ -153,7 +153,7 @@ let readAt = performance.now(); // when `current` was read, for smooth progress
 let lookupSeq = 0; // discards stale lookups when tracks change quickly
 let phase: SearchPhase = "idle";
 let songsterrResults: SongsterrResult[] = []; // Songsterr search results for the current track
-let songsterrBest: SongsterrResult | null = null; // what TabSync would show for the current track
+let songsterrBest: SongsterrResult | null = null; // what Guitarfish would show for the current track
 let shown: SongsterrResult | null = null; // the Songsterr page in the viewer
 let currentSong: Song | null = null; // local catalogue match
 let localHow = "";
@@ -465,7 +465,7 @@ function renderEmpty(s: SyncStatus) {
   if (!current) {
     if (s.tone !== "error") {
       title = "Play something on Spotify";
-      text = "TabSync detects the song and opens its tablature from Songsterr here.";
+      text = "Guitarfish detects the song and opens its tablature from Songsterr here.";
     }
   } else if (phase === "searching") {
     iconName = "search";
@@ -566,7 +566,7 @@ function renderVolume() {
 }
 
 function renderTitlebar() {
-  el.titlebarText.textContent = layout.focus && current ? `${current.title} — ${current.artist}` : "TabSync";
+  el.titlebarText.textContent = layout.focus && current ? `${current.title} — ${current.artist}` : "Guitarfish";
 }
 
 function tick() {
@@ -707,7 +707,7 @@ function catalogueRows(track: Track | null, songs: Song[]): HTMLElement {
   const list = document.createElement("ul");
   list.className = "rows";
   if (songs.length === 0) {
-    list.innerHTML = `<li class="empty-row">No songs found in the TabSync catalogue.</li>`;
+    list.innerHTML = `<li class="empty-row">No songs found in the Guitarfish catalogue.</li>`;
     return list;
   }
   for (const s of songs) {
@@ -884,9 +884,9 @@ async function showSearch(query: string, correction: Track | null) {
       <input type="search" placeholder="Artist and song" aria-label="Search" value="${escapeHtml(query)}" />
       <button class="btn primary" type="submit">Search</button>
     </form>
-    ${correction ? `<div class="notice">Choosing the tab for <b>${escapeHtml(correction.title)}</b> by ${escapeHtml(correction.artist)}. TabSync will remember your choice for this song.</div>` : ""}
+    ${correction ? `<div class="notice">Choosing the tab for <b>${escapeHtml(correction.title)}</b> by ${escapeHtml(correction.artist)}. Guitarfish will remember your choice for this song.</div>` : ""}
     <div class="list-title">Songsterr</div><div data-slot="songsterr"><ul class="rows"><li class="empty-row">Searching…</li></ul></div>
-    <div class="list-title">TabSync catalogue</div><div data-slot="local"><ul class="rows"><li class="empty-row">Searching…</li></ul></div>`;
+    <div class="list-title">Guitarfish catalogue</div><div data-slot="local"><ul class="rows"><li class="empty-row">Searching…</li></ul></div>`;
   el.page.replaceChildren(inner);
   const form = inner.querySelector("form")!;
   const input = form.querySelector("input")!;
@@ -1193,9 +1193,9 @@ async function ensurePermission(): Promise<void> {
   if (await detector.checkPermission()) return;
   const box = document.createElement("div");
   box.className = "page-inner";
-  box.innerHTML = `<div class="page-head"><h1>Allow TabSync to see what's playing</h1></div>
+  box.innerHTML = `<div class="page-head"><h1>Allow Guitarfish to see what's playing</h1></div>
     <p class="muted">Android only shares the current song with apps that have <b>Notification access</b>.
-    Tap the button, enable <b>TabSync</b>, then come back.</p>`;
+    Tap the button, enable <b>Guitarfish</b>, then come back.</p>`;
   const btn = document.createElement("button");
   btn.className = "btn primary";
   btn.textContent = "Open settings";

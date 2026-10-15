@@ -3301,7 +3301,7 @@ dependencies = [
 
 [[package]]
 name = "tabsync"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3499,7 +3499,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-nowplaying"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "tauri",

@@ -3,7 +3,7 @@ import type { LookupResponse, Song, SongsterrResult, TabInfo, Track } from "./ty
 const LOOKUP_CACHE_PREFIX = "tabsync.lookup.";
 const LOOKUP_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** Client for the TabSync server ("our system"), with a small local cache. */
+/** Client for the Guitarfish server ("our system"), with a small local cache. */
 export class TabApi {
   private tabContent = new Map<number, { format: TabInfo["format"]; data: ArrayBuffer }>();
 

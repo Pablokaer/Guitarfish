@@ -7,7 +7,7 @@ export type SearchPhase =
   | "picked" // the user chose this tab for the track earlier
   | "uncertain" // results, but none clearly the same song
   | "none" // Songsterr returned nothing
-  | "server-error"; // the TabSync server (which proxies the search) is unreachable
+  | "server-error"; // the Guitarfish server (which proxies the search) is unreachable
 
 export type Tone = "ok" | "busy" | "idle" | "warn" | "error";
 
@@ -40,7 +40,7 @@ export function syncStatus({ detectorError, hasTrack, isPlaying, phase }: Status
     case "none":
       return { tone: "warn", label: "No confident match", detail: "Songsterr has no result for this song" };
     case "server-error":
-      return { tone: "error", label: "Tab server unreachable", detail: "Songsterr search goes through the TabSync server" };
+      return { tone: "error", label: "Tab server unreachable", detail: "Songsterr search goes through the Guitarfish server" };
     case "paused":
       return { tone: "idle", label: "Connected to Spotify", detail: "Automatic tab search is off" };
     case "idle":
