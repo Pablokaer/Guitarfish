@@ -171,6 +171,11 @@ export class SyncController {
     if (this._current) await this.searchSongsterrFor(this._current, this.seq);
   }
 
+  /** Look the playing track up in the catalogue again (a tab was imported or deleted). */
+  async refreshLocal(): Promise<void> {
+    if (this._current) await this.lookupLocal(this._current, this.seq);
+  }
+
   /** "Search again": forget the pick, then look up both sides. */
   async searchAgain(): Promise<void> {
     const track = this._current;
