@@ -54,4 +54,9 @@ export interface PlaybackCapabilities {
   transport: boolean;
   seek: boolean;
   volume: boolean;
+  /**
+   * The plugin emits `nowplaying://changed` when the player reports a change, so the
+   * app can poll less often. Missing on older plugins: treat as false.
+   */
+  events?: boolean;
 }
