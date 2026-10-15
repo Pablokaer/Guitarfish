@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
+import { LISTS, isTombstone, liveEntries, mergeList, type Change, type ListName, type TabEntry } from "./library.js";
 import { normalizeArtist, normalizeTitle } from "./normalize.js";
 
 export type TabFormat = "alphatex" | "gp" | "musicxml";
@@ -69,6 +70,20 @@ CREATE INDEX IF NOT EXISTS tabs_song ON tabs(song_id);
 CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
+);
+
+-- History and favorites synced across devices (see library.ts): one row per
+-- (list, Songsterr song), either a live entry (at) or a tombstone (deleted_at).
+CREATE TABLE IF NOT EXISTS library_entries (
+  list       TEXT NOT NULL CHECK (list IN ('history','favorites')),
+  song_id    INTEGER NOT NULL,
+  url        TEXT,
+  title      TEXT,
+  artist     TEXT,
+  at         INTEGER,
+  deleted_at INTEGER,
+  PRIMARY KEY (list, song_id),
+  CHECK ((at IS NULL) <> (deleted_at IS NULL))
 );
 `;
 
@@ -171,4 +186,62 @@ export function setSetting(db: Db, key: string, value: string): void {
 
 export function deleteSetting(db: Db, key: string): void {
   db.prepare(`DELETE FROM settings WHERE key = ?`).run(key);
+}
+
+interface LibraryRow {
+  song_id: number;
+  url: string | null;
+  title: string | null;
+  artist: string | null;
+  at: number | null;
+  deleted_at: number | null;
+}
+
+/** Stored records of one list: live entries newest first, then tombstones newest first. */
+export function loadLibraryList(db: Db, list: ListName): Change[] {
+  const rows = db
+    .prepare(
+      `SELECT song_id, url, title, artist, at, deleted_at FROM library_entries WHERE list = ?
+       ORDER BY deleted_at IS NOT NULL, COALESCE(at, deleted_at) DESC, song_id ASC`,
+    )
+    .all(list) as LibraryRow[];
+  return rows.map((r): Change =>
+    r.deleted_at !== null
+      ? { songId: r.song_id, deletedAt: r.deleted_at }
+      : { url: r.url!, songId: r.song_id, title: r.title!, artist: r.artist!, at: r.at! },
+  );
+}
+
+/** Replaces the stored records of one list. */
+export function saveLibraryList(db: Db, list: ListName, records: readonly Change[]): void {
+  const insert = db.prepare(
+    `INSERT INTO library_entries (list, song_id, url, title, artist, at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  );
+  db.transaction(() => {
+    db.prepare(`DELETE FROM library_entries WHERE list = ?`).run(list);
+    for (const c of records) {
+      if (isTombstone(c)) insert.run(list, c.songId, null, null, null, null, c.deletedAt);
+      else insert.run(list, c.songId, c.url, c.title, c.artist, c.at, null);
+    }
+  })();
+}
+
+/** Merges a device's changes into the stored lists (atomically) and returns the live entries. */
+export function syncLibrary(
+  db: Db,
+  changes: Partial<Record<ListName, readonly Change[]>>,
+): Record<ListName, TabEntry[]> {
+  return db.transaction(() => {
+    const out = {} as Record<ListName, TabEntry[]>;
+    for (const list of LISTS) {
+      let records = loadLibraryList(db, list);
+      const pushed = changes[list];
+      if (pushed?.length) {
+        records = mergeList(list, records, pushed);
+        saveLibraryList(db, list, records);
+      }
+      out[list] = liveEntries(records);
+    }
+    return out;
+  })();
 }
