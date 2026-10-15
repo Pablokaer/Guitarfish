@@ -55,7 +55,5 @@ pub struct PermissionResponse {
 
 /// `spotify:track:abc` -> `abc`. Returns None for ads/episodes/local files.
 pub fn spotify_track_id(uri: &str) -> Option<String> {
-    uri.strip_prefix("spotify:track:")
-        .filter(|id| !id.is_empty())
-        .map(str::to_string)
+    uri.strip_prefix("spotify:track:").filter(|id| !id.is_empty()).map(str::to_string)
 }

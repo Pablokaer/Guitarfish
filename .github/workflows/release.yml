@@ -1,6 +1,8 @@
 name: Release
 
-# Builds installable apps and attaches them to a GitHub release:
+# Runs the tests (ci.yml) and the code review (code-review.yml) first; nothing is
+# built or released unless both pass. Then builds installable apps and attaches
+# them to a GitHub release:
 #   - Windows: .msi and .exe (NSIS) installers
 #   - macOS:   universal .dmg (Apple Silicon + Intel)
 #   - Android: universal .apk
@@ -34,8 +36,24 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # A release is only built when the tests and the code review pass on this commit.
+  tests:
+    name: Tests
+    uses: ./.github/workflows/ci.yml
+
+  review:
+    name: Code review
+    uses: ./.github/workflows/code-review.yml
+    # The called workflow's AI job asks for these (it is skipped outside pull requests).
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    secrets: inherit
+
   prepare:
     name: Create draft release
+    needs: [tests, review]
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}

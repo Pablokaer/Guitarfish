@@ -155,10 +155,7 @@ mod imp {
     }
 
     fn now_unix_ms() -> i64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0)
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
     }
 
     /// Prefer a Spotify session; fall back to the session Windows considers current
@@ -191,11 +188,8 @@ mod imp {
         }
         let album = props.AlbumTitle().map(|s| s.to_string()).ok().filter(|s| !s.is_empty());
 
-        let is_playing = session
-            .GetPlaybackInfo()
-            .and_then(|p| p.PlaybackStatus())
-            .map(|s| s == Status::Playing)
-            .unwrap_or(false);
+        let is_playing =
+            session.GetPlaybackInfo().and_then(|p| p.PlaybackStatus()).map(|s| s == Status::Playing).unwrap_or(false);
 
         // Timeline values are in 100 ns units. Spotify only refreshes Position on
         // state changes, so extrapolate from LastUpdatedTime while playing.
@@ -215,10 +209,7 @@ mod imp {
                 if end > 0 {
                     pos = pos.min(end);
                 }
-                (
-                    (end > 0).then_some(end as u64),
-                    (pos >= 0).then_some(pos as u64),
-                )
+                ((end > 0).then_some(end as u64), (pos >= 0).then_some(pos as u64))
             }
             Err(_) => (None, None),
         };
@@ -273,7 +264,8 @@ mod imp {
     use crate::models::{NowPlayingResponse, PlaybackCapabilities};
     use crate::Result;
 
-    pub const CAPABILITIES: PlaybackCapabilities = PlaybackCapabilities { transport: false, seek: false, volume: false };
+    pub const CAPABILITIES: PlaybackCapabilities =
+        PlaybackCapabilities { transport: false, seek: false, volume: false };
 
     pub fn read() -> Result<NowPlayingResponse> {
         Ok(NowPlayingResponse { track: None })

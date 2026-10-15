@@ -1,10 +1,13 @@
 name: CI
 
+# Tests. Also called by release.yml, so a release is only built from a commit
+# whose tests pass.
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 concurrency:
   group: ci-${{ github.ref }}

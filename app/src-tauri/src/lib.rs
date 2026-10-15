@@ -50,7 +50,5 @@ pub fn run() {
             let _ = app.emit_to("main", "layout-command", cmd);
         }
     });
-    builder
-        .run(tauri::generate_context!())
-        .expect("error while running TabSync");
+    builder.run(tauri::generate_context!()).expect("error while running TabSync");
 }

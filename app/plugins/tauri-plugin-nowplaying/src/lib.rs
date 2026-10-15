@@ -2,9 +2,9 @@
 //!
 //! * macOS   – asks the Spotify app via AppleScript (`osascript`).
 //! * Windows – Global System Media Transport Controls (SMTC), the API behind the
-//!             media overlay. Works for Spotify and other players.
+//!   media overlay. Works for Spotify and other players.
 //! * Android – `MediaSessionManager` through a `NotificationListenerService`
-//!             (Kotlin, see `android/`). The user grants notification access once.
+//!   (Kotlin, see `android/`). The user grants notification access once.
 //!
 //! All platforms expose the same command: `plugin:nowplaying|get_now_playing`.
 //! `control` drives Spotify (play/pause, skip, seek, volume) where the OS allows
