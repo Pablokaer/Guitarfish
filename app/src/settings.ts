@@ -1,7 +1,6 @@
 /** Per-device settings, kept in the webview's localStorage. */
 export interface Settings {
   serverUrl: string;
-  spotifyFallback: boolean;
   followOffsetSec: number;
   /** Local (alphaTab) tab: scroll to and highlight the bar being played. */
   follow: boolean;
@@ -28,7 +27,6 @@ function defaultServerUrl(): string {
 export function defaultSettings(): Settings {
   return {
     serverUrl: defaultServerUrl(),
-    spotifyFallback: true,
     followOffsetSec: 0,
     follow: true,
     zoom: 1,

@@ -68,19 +68,6 @@ export class TabApi {
     this.tabContent.set(tab.id, value);
     return value;
   }
-
-  // ---- Spotify fallback (tokens live on the server) ----
-  spotifyStatus(): Promise<{ configured: boolean; connected: boolean }> {
-    return this.json("/auth/spotify/status");
-  }
-
-  spotifyLoginUrl(): string {
-    return `${this.baseUrl}/auth/spotify/login`;
-  }
-
-  async spotifyNowPlaying(): Promise<Track | null> {
-    return (await this.json<{ track: Track | null }>("/v1/spotify/now-playing")).track;
-  }
 }
 
 /** Stable identity of a track: the Spotify ID when known, else artist + title. */

@@ -1,4 +1,4 @@
-/** What the detectors report. Same shape for the OS plugin and the Spotify fallback. */
+/** What the now-playing plugin reports about the Spotify app on this device. */
 export interface Track {
   title: string;
   artist: string;
@@ -10,7 +10,7 @@ export interface Track {
   /** Spotify volume 0–100 (macOS only). */
   volume?: number | null;
   artworkUrl?: string | null;
-  source: "os" | "spotify-api";
+  source: "os";
   player: string;
 }
 

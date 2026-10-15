@@ -101,9 +101,6 @@ const el = {
   toolsSource: $("tools-source"),
   setFollowSpotify: $<HTMLInputElement>("set-follow-spotify"),
   setAutoSearch: $<HTMLInputElement>("set-auto-search"),
-  setFallback: $<HTMLInputElement>("set-fallback"),
-  spotifyStatus: $("spotify-status"),
-  spotifyBtn: $<HTMLButtonElement>("btn-spotify"),
   matchInfo: $("match-info"),
   searchAgain: $<HTMLButtonElement>("btn-search-again"),
   wrong: $<HTMLButtonElement>("btn-wrong"),
@@ -153,7 +150,7 @@ const settings = loadSettings();
 saveSettings(settings); // persists the v2 migration
 const api = new TabApi(settings.serverUrl);
 api.setBaseUrl(settings.serverUrl);
-const detector = new Detector(api, { fallbackEnabled: () => settings.spotifyFallback });
+const detector = new Detector();
 const viewer = new TabViewer(el.tab, el.local, settings.zoom);
 const history = new EntryStore("tabsync.history");
 const favorites = new EntryStore("tabsync.favorites");
@@ -1008,18 +1005,6 @@ function entryRow(e: TabEntry, kind: "history" | "favorites"): HTMLElement {
 }
 
 // ---- Tools sidebar -------------------------------------------------------------
-async function refreshSpotifyStatus() {
-  try {
-    const s = await api.spotifyStatus();
-    el.spotifyStatus.textContent = !s.configured ? "Web API: not configured on server" : s.connected ? "Web API: connected" : "Web API: not connected";
-    el.spotifyBtn.disabled = !s.configured;
-    el.spotifyBtn.textContent = s.connected ? "Reconnect" : "Connect";
-  } catch {
-    el.spotifyStatus.textContent = "Web API: server unreachable";
-    el.spotifyBtn.disabled = true;
-  }
-}
-
 function applyTheme() {
   document.documentElement.dataset.theme = settings.theme;
 }
@@ -1027,7 +1012,6 @@ function applyTheme() {
 function bindTools() {
   el.setFollowSpotify.checked = settings.followSpotify;
   el.setAutoSearch.checked = settings.autoSearch;
-  el.setFallback.checked = settings.spotifyFallback;
   el.setFollow.checked = settings.follow;
   el.setServer.value = settings.serverUrl;
   el.setOffset.value = String(settings.followOffsetSec);
@@ -1048,17 +1032,11 @@ function bindTools() {
     saveSettings(settings);
     if (settings.autoSearch && sync.current && sync.phase === "paused") void sync.searchCurrent();
   };
-  el.setFallback.onchange = () => {
-    settings.spotifyFallback = el.setFallback.checked;
-    saveSettings(settings);
-  };
-  el.spotifyBtn.onclick = () => void openExternal(api.spotifyLoginUrl());
   el.setServer.onchange = () => {
     settings.serverUrl = el.setServer.value.trim().replace(/\/+$/, "");
     api.setBaseUrl(settings.serverUrl);
     saveSettings(settings);
     sync.relookup(); // look the current song up again on the new server
-    void refreshSpotifyStatus();
   };
   el.testBtn.onclick = async () => {
     try {
@@ -1274,9 +1252,8 @@ async function main() {
   renderAll();
   renderNowPlaying();
   requestAnimationFrame(tick);
-  void refreshSpotifyStatus();
   if (!isTauri()) {
-    showBanner("Running in a browser: device detection is off, only the Spotify Web API fallback works.");
+    showBanner("Running in a browser: Guitarfish can't see what Spotify plays here. Use the desktop or Android app.");
   }
   await loadCapabilities();
   renderNowPlaying();

@@ -191,14 +191,4 @@ describe("other endpoints", () => {
     fetchMock.mockResolvedValueOnce(new Response("", { status: 404 }));
     await expect(api.tab({ ...tab, id: 6 })).rejects.toThrow("tab 6 → 404");
   });
-
-  it("Spotify fallback endpoints", async () => {
-    const api = new TabApi(BASE);
-    const t = track({ source: "spotify-api" });
-    fetchMock.mockResolvedValueOnce(json({ configured: true, connected: false })).mockResolvedValueOnce(json({ track: t }));
-    expect(await api.spotifyStatus()).toEqual({ configured: true, connected: false });
-    expect(await api.spotifyNowPlaying()).toEqual(t);
-    expect(api.spotifyLoginUrl()).toBe(`${BASE}/auth/spotify/login`);
-    expect(urls()).toEqual([`${BASE}/auth/spotify/status`, `${BASE}/v1/spotify/now-playing`]);
-  });
 });
