@@ -13,3 +13,4 @@ app/public/soundfont/
 .idea/
 app/test-results/
 app/playwright-report/
+.claude/
