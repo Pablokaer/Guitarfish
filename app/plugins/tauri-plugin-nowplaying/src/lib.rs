@@ -3,6 +3,7 @@
 //! * macOS   – asks the Spotify app via AppleScript (`osascript`).
 //! * Windows – Global System Media Transport Controls (SMTC), the API behind the
 //!   media overlay. Works for Spotify and other players.
+//! * Linux   – MPRIS over the D-Bus session bus (`org.mpris.MediaPlayer2.spotify`).
 //! * Android – `MediaSessionManager` through a `NotificationListenerService`
 //!   (Kotlin, see `android/`). The user grants notification access once.
 //!
@@ -10,8 +11,8 @@
 //! `control` drives Spotify (play/pause, skip, seek, volume) where the OS allows
 //! it; `get_capabilities` tells the UI which of those controls to show.
 //!
-//! Where the OS announces changes (macOS: Spotify's distributed notification),
-//! the plugin also emits [`CHANGED_EVENT`] to the app, with no payload, and
+//! Where the OS announces changes (macOS: Spotify's distributed notification;
+//! Linux: MPRIS `PropertiesChanged`), the plugin also emits [`CHANGED_EVENT`] to the app, with no payload, and
 //! `get_capabilities` reports `events: true`. The UI should then call
 //! `get_now_playing` right away; polling stays as a fallback.
 

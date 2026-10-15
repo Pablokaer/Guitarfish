@@ -1,10 +1,10 @@
-use serde::de::DeserializeOwned;
+use serde::{de::DeserializeOwned, Serialize};
 use tauri::{
     plugin::{PluginApi, PluginHandle},
     AppHandle, Runtime,
 };
 
-use crate::models::{NowPlayingResponse, PermissionResponse};
+use crate::models::{NowPlayingResponse, PermissionResponse, PlaybackCapabilities};
 
 #[cfg(target_os = "ios")]
 compile_error!("tauri-plugin-nowplaying: iOS is not supported (iOS does not expose other apps' now-playing info).");
@@ -35,4 +35,20 @@ impl<R: Runtime> NowPlaying<R> {
     pub fn request_permission(&self) -> crate::Result<PermissionResponse> {
         self.0.run_mobile_plugin("requestPermission", ()).map_err(Into::into)
     }
+
+    /// See `commands::control`. Android supports transport and seek.
+    pub fn control(&self, action: String, value: Option<f64>) -> crate::Result<()> {
+        self.0.run_mobile_plugin("control", ControlArgs { action, value }).map_err(Into::into)
+    }
+
+    pub fn get_capabilities(&self) -> crate::Result<PlaybackCapabilities> {
+        self.0.run_mobile_plugin("getCapabilities", ()).map_err(Into::into)
+    }
+}
+
+/// `{ action, value }`, the same payload the desktop `control` command takes.
+#[derive(Serialize)]
+struct ControlArgs {
+    action: String,
+    value: Option<f64>,
 }
