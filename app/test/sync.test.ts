@@ -513,6 +513,45 @@ describe("local catalogue", () => {
     await vi.advanceTimersByTimeAsync(RETRY_MS * 2);
     expect(s.catalogue.lookup.mock.calls.map((c) => (c as unknown as [Track])[0].title)).toEqual(["Uprising", "Wonderwall - Remastered"]);
   });
+
+  it("refreshLocal() looks the playing track up again, leaving Songsterr alone", async () => {
+    const s = setup();
+    s.play(uprising);
+    await s.sync.poll();
+    await flush();
+    expect(s.ui.localMiss).toHaveBeenCalledTimes(1);
+    // A tab for it was just imported.
+    const m = song(5, "Uprising", "Muse");
+    s.catalogue.lookup.mockResolvedValueOnce({ match: m, confidence: 1, method: "external-id", candidates: [m] });
+    await s.sync.refreshLocal();
+    expect(s.catalogue.lookup).toHaveBeenCalledTimes(2);
+    expect(s.ui.localMatch).toHaveBeenCalledWith(m, "external-id");
+    expect(s.songsterr).toHaveBeenCalledTimes(1);
+    expect(s.ui.trackChanged).toHaveBeenCalledTimes(1);
+    expect(s.sync.phase).toBe("found");
+  });
+
+  it("refreshLocal() does nothing without a track", async () => {
+    const s = setup();
+    await s.sync.refreshLocal();
+    expect(s.catalogue.lookup).not.toHaveBeenCalled();
+  });
+
+  it("refreshLocal() drops its result when the track changed meanwhile", async () => {
+    const s = setup();
+    s.play(uprising);
+    await s.sync.poll();
+    await flush();
+    const late = deferred<LookupResponse>();
+    s.catalogue.lookup.mockReturnValueOnce(late.promise);
+    const refreshing = s.sync.refreshLocal();
+    s.play(wonderwall);
+    await s.sync.poll();
+    await flush();
+    late.resolve({ match: song(5, "Uprising", "Muse"), confidence: 1, method: "exact", candidates: [] });
+    await refreshing;
+    expect(s.ui.localMatch).not.toHaveBeenCalled();
+  });
 });
 
 describe("picks", () => {
