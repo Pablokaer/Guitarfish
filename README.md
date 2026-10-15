@@ -82,15 +82,17 @@ The app and the server are separate programs. The server can run on the same com
   - On macOS the plugin observes Spotify's `com.spotify.client.PlaybackStateChanged` distributed notification, and on Linux the MPRIS `PropertiesChanged` signal. Each one emits the app event `nowplaying://changed` (no payload), and `get_capabilities` then reports `events: true`. A listener can call `get_now_playing` at once instead of waiting for the next poll.
   - On Android, a `NotificationListenerService` gives the app the right to list other apps' media sessions; the plugin then reads Spotify's (`com.spotify.music`) metadata and playback state.
 - **UI** (`app/src`), plain TypeScript modules:
-  - `main.ts` holds the 1-second poll loop, the views and all rendering.
+  - `main.ts` wires the modules below to the DOM: the views and all rendering.
+  - `sync.ts` (`SyncController`) runs the poll loop and the tab lookup for each new track.
+  - `librarysync.ts` (`LibrarySync`) syncs history and favorites with the server through a queue of pending changes.
   - `update.ts` checks GitHub for a newer release.
-  - `detector.ts` combines the device reading with the Web API fallback.
+  - `detector.ts` combines the device reading with the Web API fallback, and reads the plugin's capabilities.
   - `api.ts` is the HTTP client. It caches confident lookups in `localStorage` for 7 days.
   - `match.ts` cleans Spotify titles and decides whether a Songsterr result is really the same song.
   - `viewer.ts` wraps alphaTab.
   - `embed.ts` positions the native Songsterr webview.
   - `layout.ts`, `settings.ts`, `library.ts` (history and favorites) and `status.ts` are pure state modules, each with unit tests.
-  - Per-device state lives in the webview's `localStorage`: settings, layout, history, favorites and "Wrong tab?" picks.
+  - Per-device state lives in the webview's `localStorage`: settings, layout, history, favorites, pending library changes and "Wrong tab?" picks. History and favorites are also synced through the server (see *Sync*, below); `localStorage` is their offline copy.
 
 ### The server
 
@@ -113,7 +115,8 @@ The app and the server are separate programs. The server can run on the same com
 
 ## How it works, end to end
 
-1. **Detect.** Every second the UI calls `plugin:nowplaying|get_now_playing`.
+1. **Detect.** The UI calls `plugin:nowplaying|get_now_playing` every second.
+   - When `get_capabilities` reports `events: true`, the plugin emits a `nowplaying://changed` Tauri event whenever the player reports a change (on macOS, Spotify's distributed notification). The UI then reads at once on each event and polls only every 5 seconds, moving the position forward locally between reads. Plugins without the field count as `events: false` and keep the 1-second polling.
    - If the device reports nothing and the fallback is on, it asks the server for `/v1/spotify/now-playing`, at most every 3 seconds.
    - Between those calls it moves the last known position forward locally.
 2. **Identify.** The track's identity is its Spotify ID when available (macOS, Linux, Web API), otherwise artist + title (Windows, Android). Nothing else happens until that identity changes.
@@ -132,7 +135,12 @@ The app and the server are separate programs. The server can run on the same com
    - **Songsterr view** (desktop default): Songsterr refuses iframes, so the page opens in a native child webview laid over the viewer area. Moving or resizing panels only repositions that webview; it never reloads the page.
    - **Local view:** alphaTab renders the tab. **Follow** builds a timeline of bar start times from the tab's time signatures and tempo, finds the bar at the current song position (plus your offset), highlights it and scrolls it into the upper third of the view.
 6. **Control** (desktop): the Spotify player strip shows artwork, progress and volume. It drives Spotify through `plugin:nowplaying|control`: AppleScript on macOS (transport, seek, volume), SMTC on Windows (transport and seek; SMTC has no volume control) and MPRIS on Linux (transport, seek, volume). On Android the plugin drives Spotify's `MediaController` (transport and seek) once Notification access is granted.
-7. **Updates.** At startup and every 6 hours, the app fetches the latest published release from the GitHub API (`releases/latest`) and compares it with its own version.
+7. **Sync.** History and favorites are shared by every device that uses the same server (Tools → *Sync history & favorites*, on by default).
+   - Each local change updates the `localStorage` lists at once and is queued in `tabsync.library.pending`: opening a tab queues the entry with the current time, saving a favorite queues the entry, unsaving it or clearing history queues a `{ songId, deletedAt }` removal. The queue keeps one change per song (the newest), so it survives restarts and offline use without growing.
+   - The first sync on a device (and after changing the server) also queues the full local lists (`tabsync.library.seeded` records that it happened). Repeating it is harmless: the server keeps the newest change per song.
+   - A sync posts the queue to `POST /v1/library/sync` in batches of at most 500 changes per list, then replaces the local lists with the merged lists the server returns, re-applying any change made while the request was out. With nothing queued it just reads `GET /v1/library`.
+   - It runs at startup, 2 seconds after local changes, every minute and when the window regains focus. If the server can't be reached the queue is kept for the next attempt (the Tools sidebar shows *Offline, will sync*); a batch the server rejects as malformed (400) is dropped so it can't block the rest.
+8. **Updates.** At startup and every 6 hours, the app fetches the latest published release from the GitHub API (`releases/latest`) and compares it with its own version.
    - When the release is newer, it shows a system notification and a banner whose *Download* button opens the release page.
    - Each version is announced once (`tabsync.update.announced` in `localStorage`).
    - Drafts and pre-releases are ignored. Network errors are silent.
@@ -326,7 +334,7 @@ The server requests the scopes `user-read-currently-playing` and `user-read-play
 
 - Follow mode ignores repeats, and tempo changes only take effect at bar boundaries. Use the offset slider to compensate. *Next: a real tempo map, or alphaTab's external-media sync.*
 - Fuzzy matching scans every song in memory, which is fine up to a few tens of thousands of songs. *Next: Postgres + `pg_trgm`, which uses the same similarity metric.*
-- The UI still polls `get_now_playing` every second (`osascript` on macOS). The plugin already emits `nowplaying://changed` on macOS and Linux. *Next: refresh on that event and poll less often.*
+- Platforms without playback events (Windows, Android) poll the detector every second.
 - Windows, Linux and Android support only Spotify. Removing the package, app-ID or bus-name filter would allow other players.
 - No authentication on the API. Add it before exposing the server outside your network.
 - Tabs are copyrighted works. Only serve tabs you created, tabs licensed to you, or tabs from a licensed provider.

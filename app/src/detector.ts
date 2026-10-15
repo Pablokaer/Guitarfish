@@ -1,6 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type { TabApi } from "./api";
-import type { Track } from "./types";
+import type { PlaybackCapabilities, Track } from "./types";
 
 export type DetectorStatus =
   | { kind: "ok" }
@@ -74,5 +74,46 @@ export class Detector {
 
   async requestPermission(): Promise<void> {
     if (isTauri()) await invoke("plugin:nowplaying|request_permission");
+  }
+
+  /**
+   * Which playback controls the device detector supports, and whether it emits
+   * `nowplaying://changed`. Fields an older plugin doesn't send count as false.
+   */
+  async capabilities(): Promise<PlaybackCapabilities> {
+    let raw: Partial<Record<keyof PlaybackCapabilities, unknown>> | null = null;
+    if (isTauri()) {
+      try {
+        raw = await invoke("plugin:nowplaying|get_capabilities");
+      } catch {
+        /* older plugin: no controls */
+      }
+    }
+    const flag = (v: unknown) => v === true;
+    return { transport: flag(raw?.transport), seek: flag(raw?.seek), volume: flag(raw?.volume), events: flag(raw?.events) };
+  }
+
+  /**
+   * Android: until Notification access is granted, calls `onNeeded` (to explain and
+   * offer the settings) and waits for the user to come back with it granted. Returns
+   * whether it had to wait, so the caller can reload what depends on the access
+   * (capabilities).
+   */
+  async waitForPermission(
+    onNeeded: () => void,
+    doc: Pick<Document, "visibilityState" | "addEventListener" | "removeEventListener"> = document,
+  ): Promise<boolean> {
+    if (await this.checkPermission()) return false;
+    onNeeded();
+    await new Promise<void>((resolve) => {
+      const check = async () => {
+        if (doc.visibilityState === "visible" && (await this.checkPermission())) {
+          doc.removeEventListener("visibilitychange", check);
+          resolve();
+        }
+      };
+      doc.addEventListener("visibilitychange", check);
+    });
+    return true;
   }
 }

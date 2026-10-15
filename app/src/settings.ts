@@ -13,6 +13,8 @@ export interface Settings {
   /** Search Songsterr when the song changes. Off: only on request. */
   autoSearch: boolean;
   theme: "graphite" | "midnight";
+  /** Sync history and favorites with the tab server. */
+  librarySync: boolean;
   /** Bumped when a default changes meaning; see loadSettings. */
   version: number;
 }
@@ -36,6 +38,7 @@ export function defaultSettings(): Settings {
     followSpotify: true,
     autoSearch: true,
     theme: "graphite",
+    librarySync: true,
     version: VERSION,
   };
 }
@@ -49,6 +52,7 @@ export function parseSettings(raw: unknown): Settings {
   // the main viewer, so start there once; the user can still switch back.
   if (!((stored.version ?? 1) >= 2)) s.songsterrPanel = true;
   if (s.theme !== "graphite" && s.theme !== "midnight") s.theme = defaults.theme;
+  if (typeof s.librarySync !== "boolean") s.librarySync = defaults.librarySync;
   s.version = VERSION;
   return s;
 }

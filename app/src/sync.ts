@@ -3,10 +3,20 @@ import type { PickStore } from "./library";
 import { isConfidentMatch, songsterrQuery, songsterrSearchPage } from "./match";
 import type { Settings } from "./settings";
 import type { SearchPhase } from "./status";
-import type { Song, SongsterrResult, Track } from "./types";
+import type { PlaybackCapabilities, Song, SongsterrResult, Track } from "./types";
 
 export const POLL_MS = 1000;
+/**
+ * Poll interval when the detector also emits `nowplaying://changed`: changes arrive
+ * at once, and the position is extrapolated locally between reads (livePosition).
+ */
+export const EVENT_POLL_MS = 5000;
 export const RETRY_MS = 5000;
+
+/** How often to poll, given the detector's capabilities (unknown: plain polling). */
+export function pollIntervalFor(caps: Partial<Pick<PlaybackCapabilities, "events">> | null): number {
+  return caps?.events === true ? EVENT_POLL_MS : POLL_MS;
+}
 
 /** What the sync loop asks of the UI. main.ts implements it with the DOM. */
 export interface SyncUi {
@@ -56,6 +66,9 @@ export class SyncController {
   private _results: SongsterrResult[] = []; // Songsterr search results for the current track
   private _best: SongsterrResult | null = null; // what Guitarfish would show for the current track
   private polling = false;
+  private repoll = false; // wake() arrived during a poll: read again after it
+  private interval: number | null = null; // poll interval, once started
+  private timer: ReturnType<typeof setInterval> | null = null;
   private now: () => number;
   private forgetLookup: (t: Track) => void;
 
@@ -97,15 +110,41 @@ export class SyncController {
     this.readAt = this.now();
   }
 
-  /** Polls now, then every POLL_MS. */
-  async start(): Promise<void> {
+  /** Polls now, then every `intervalMs` (see pollIntervalFor). */
+  async start(intervalMs = POLL_MS): Promise<void> {
     await this.poll();
-    setInterval(() => void this.poll(), POLL_MS);
+    this.setPollInterval(intervalMs);
+  }
+
+  /** Changes the interval of the polling loop (and starts it). */
+  setPollInterval(ms: number): void {
+    this.interval = ms;
+    this.restartTimer();
+  }
+
+  private restartTimer(): void {
+    if (this.timer !== null) clearInterval(this.timer);
+    this.timer = this.interval === null ? null : setInterval(() => void this.poll(), this.interval);
+  }
+
+  /**
+   * The player reported a change (`nowplaying://changed`): read now, and count the
+   * next regular poll from here. A poll already reading may predate the change, so
+   * another read follows it.
+   */
+  async wake(): Promise<void> {
+    this.restartTimer();
+    if (this.polling) {
+      this.repoll = true;
+      return;
+    }
+    await this.poll();
   }
 
   async poll(): Promise<void> {
     if (this.polling) return;
     this.polling = true;
+    this.repoll = false;
     try {
       const track = await this.deps.detector.read();
       this._current = track;
@@ -122,6 +161,7 @@ export class SyncController {
     } finally {
       this.polling = false;
     }
+    if (this.repoll) await this.poll();
   }
 
   /** Look the playing track up again on the next poll (e.g. the server changed). */

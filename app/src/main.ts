@@ -16,12 +16,13 @@ import {
   type LayoutCommand,
   type LayoutState,
 } from "./layout";
-import { EntryStore, isSongPage, PickStore, pushHistory, toEntry, toggleFavorite, toResult, type TabEntry } from "./library";
+import { EntryStore, isSongPage, PickStore, toEntry, toResult, type TabEntry } from "./library";
+import { LibrarySync, syncHint } from "./librarysync";
 import { isConfidentMatch, songsterrQuery, songsterrSearchPage } from "./match";
 import { loadSettings, saveSettings } from "./settings";
 import { syncStatus, type SyncStatus } from "./status";
 import "./styles.css";
-import { SyncController } from "./sync";
+import { pollIntervalFor, SyncController } from "./sync";
 import type { PlaybackCapabilities, Song, SongsterrResult, TabInfo, Track } from "./types";
 import { checkForUpdate, type UpdateInfo } from "./update";
 import { TabViewer } from "./viewer";
@@ -122,6 +123,8 @@ const el = {
   layToolbar: $<HTMLInputElement>("lay-toolbar"),
   layFocus: $<HTMLInputElement>("lay-focus"),
   setServer: $<HTMLInputElement>("set-server"),
+  setLibrarySync: $<HTMLInputElement>("set-library-sync"),
+  librarySyncHint: $("library-sync-hint"),
   testBtn: $<HTMLButtonElement>("btn-test"),
 };
 
@@ -142,6 +145,15 @@ const viewer = new TabViewer(el.tab, el.local, settings.zoom);
 const history = new EntryStore("tabsync.history");
 const favorites = new EntryStore("tabsync.favorites");
 const picks = new PickStore();
+/** History and favorites synced with the tab server; the stores above are its offline cache. */
+const library = new LibrarySync({
+  api,
+  history,
+  favorites,
+  enabled: () => settings.librarySync,
+  onChange: () => renderLibrary(),
+  onStatus: (s) => (el.librarySyncHint.textContent = syncHint(s)),
+});
 /** Detector polling and the tab lookup for each new track; the UI below renders it. */
 const sync = new SyncController({
   detector,
@@ -181,7 +193,7 @@ let view: View = "tab";
 let shown: SongsterrResult | null = null; // the Songsterr page in the viewer
 let currentSong: Song | null = null; // local catalogue match
 let localHow = "";
-let caps: PlaybackCapabilities = { transport: false, seek: false, volume: false };
+let caps: PlaybackCapabilities = { transport: false, seek: false, volume: false, events: false };
 let volumeHoldUntil = 0; // ignore polled volume while the user drags the slider
 let lastVolume = 50;
 
@@ -359,7 +371,7 @@ async function openSongsterr(r: SongsterrResult, how: "auto" | "manual") {
     saveSettings(settings);
     setView("tab");
   }
-  if (isSongPage(r)) history.update((l) => pushHistory(l, toEntry(r)));
+  if (isSongPage(r)) library.open(toEntry(r));
   // Same page already showing: nothing to load (keeps Songsterr's state).
   if (shown?.url === r.url && embed.isOpen) {
     renderAll();
@@ -422,9 +434,16 @@ function renderRecent() {
 
 function toggleFavoriteShown() {
   if (!shown || !isSongPage(shown)) return;
-  favorites.update((l) => toggleFavorite(l, toEntry(shown!)));
+  library.toggleFavorite(toEntry(shown!));
   renderToolbar();
   if (view === "favorites") renderEntryPage("favorites");
+}
+
+/** The lists changed from a sync: refresh every view that shows them. */
+function renderLibrary() {
+  renderRecent();
+  renderToolbar();
+  if (view === "history" || view === "favorites") renderEntryPage(view);
 }
 
 // ---- Status --------------------------------------------------------------------
@@ -611,11 +630,7 @@ async function control(action: "playpause" | "next" | "previous" | "seek" | "vol
 
 async function loadCapabilities() {
   if (!isTauri()) return;
-  try {
-    caps = await invoke<PlaybackCapabilities>("plugin:nowplaying|get_capabilities");
-  } catch {
-    /* older plugin or mobile: no controls */
-  }
+  caps = await detector.capabilities();
 }
 
 function bindPlayer() {
@@ -863,7 +878,7 @@ function renderEntryPage(kind: "history" | "favorites") {
     clear.type = "button";
     clear.textContent = "Clear history";
     clear.onclick = () => {
-      history.update(() => []);
+      library.clearHistory();
       renderRecent();
       renderEntryPage("history");
     };
@@ -896,7 +911,7 @@ function entryRow(e: TabEntry, kind: "history" | "favorites"): HTMLElement {
   star.setAttribute("aria-pressed", String(fav));
   star.innerHTML = icon(fav ? "starFilled" : "star", 16);
   star.onclick = () => {
-    favorites.update((l) => toggleFavorite(l, { ...e, at: Date.now() }));
+    library.toggleFavorite(e);
     renderEntryPage(kind);
     renderToolbar();
   };
@@ -956,6 +971,14 @@ function bindTools() {
     saveSettings(settings);
     sync.relookup(); // look the current song up again on the new server
     void refreshSpotifyStatus();
+    library.resetSeed(); // a new server starts with this device's full lists
+    void library.syncNow();
+  };
+  el.setLibrarySync.checked = settings.librarySync;
+  el.setLibrarySync.onchange = () => {
+    settings.librarySync = el.setLibrarySync.checked;
+    saveSettings(settings);
+    void library.syncNow(); // syncs, or shows "Sync off"
   };
   el.testBtn.onclick = async () => {
     try {
@@ -1098,30 +1121,24 @@ function renderAll() {
 
 // ---- Permission (Android) ----------------------------------------------------
 async function ensurePermission(): Promise<void> {
-  if (await detector.checkPermission()) return;
-  const box = document.createElement("div");
-  box.className = "page-inner";
-  box.innerHTML = `<div class="page-head"><h1>Allow Guitarfish to see what's playing</h1></div>
+  const waited = await detector.waitForPermission(() => {
+    const box = document.createElement("div");
+    box.className = "page-inner";
+    box.innerHTML = `<div class="page-head"><h1>Allow Guitarfish to see what's playing</h1></div>
     <p class="muted">Android only shares the current song with apps that have <b>Notification access</b>.
     Tap the button, enable <b>Guitarfish</b>, then come back.</p>`;
-  const btn = document.createElement("button");
-  btn.className = "btn primary";
-  btn.textContent = "Open settings";
-  btn.onclick = () => detector.requestPermission();
-  box.appendChild(btn);
-  showPanel(box);
-
-  // Re-check when the user returns to the app.
-  await new Promise<void>((resolve) => {
-    const check = async () => {
-      if (document.visibilityState === "visible" && (await detector.checkPermission())) {
-        document.removeEventListener("visibilitychange", check);
-        showPanel(null);
-        resolve();
-      }
-    };
-    document.addEventListener("visibilitychange", check);
+    const btn = document.createElement("button");
+    btn.className = "btn primary";
+    btn.textContent = "Open settings";
+    btn.onclick = () => detector.requestPermission();
+    box.appendChild(btn);
+    showPanel(box);
   });
+  if (!waited) return;
+  showPanel(null);
+  // The playback controls depend on the access: read them again now it's granted.
+  await loadCapabilities();
+  renderNowPlaying();
 }
 
 // ---- Updates ---------------------------------------------------------------------
@@ -1162,10 +1179,21 @@ async function main() {
   if (!isTauri()) {
     showBanner("Running in a browser: device detection is off, only the Spotify Web API fallback works.");
   }
+  void library.start(window);
   await loadCapabilities();
   renderNowPlaying();
   await ensurePermission();
-  await sync.start();
+  // With change events from the plugin, read on each event and poll only now and then.
+  let events = caps.events;
+  if (events) {
+    try {
+      await listen("nowplaying://changed", () => void sync.wake());
+    } catch (e) {
+      console.warn("nowplaying events unavailable, polling instead", e);
+      events = false;
+    }
+  }
+  await sync.start(pollIntervalFor({ events }));
   void checkUpdates();
   setInterval(() => void checkUpdates(), UPDATE_CHECK_MS);
 }

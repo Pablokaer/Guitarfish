@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackKey } from "../src/api";
 import { songsterrSearchPage } from "../src/match";
-import { POLL_MS, RETRY_MS, SyncController, type SyncDeps, type SyncUi } from "../src/sync";
+import { EVENT_POLL_MS, POLL_MS, pollIntervalFor, RETRY_MS, SyncController, type SyncDeps, type SyncUi } from "../src/sync";
 import type { LookupResponse, Song, SongsterrResult, Track } from "../src/types";
 
 const track = (title: string, artist: string, extra: Partial<Track> = {}): Track => ({
@@ -155,6 +155,70 @@ describe("polling", () => {
     await s.sync.poll();
     await flush();
     expect(s.ui.trackChanged).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("event-driven polling", () => {
+  it("polls every POLL_MS without playback events, every EVENT_POLL_MS with them", () => {
+    expect(pollIntervalFor(null)).toBe(POLL_MS);
+    expect(pollIntervalFor({ transport: true, seek: true, volume: true })).toBe(POLL_MS);
+    expect(pollIntervalFor({ transport: true, seek: true, volume: true, events: false })).toBe(POLL_MS);
+    expect(pollIntervalFor({ transport: true, seek: true, volume: true, events: true })).toBe(EVENT_POLL_MS);
+    expect(EVENT_POLL_MS).toBeGreaterThan(POLL_MS);
+  });
+
+  it("start() takes the interval to poll at", async () => {
+    const s = setup();
+    await s.sync.start(EVENT_POLL_MS);
+    expect(s.detector.read).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(EVENT_POLL_MS - 1);
+    expect(s.detector.read).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(s.detector.read).toHaveBeenCalledTimes(2);
+  });
+
+  it("setPollInterval() changes the interval of a running loop", async () => {
+    const s = setup();
+    await s.sync.start();
+    s.sync.setPollInterval(EVENT_POLL_MS);
+    await vi.advanceTimersByTimeAsync(EVENT_POLL_MS * 2);
+    expect(s.detector.read).toHaveBeenCalledTimes(3);
+  });
+
+  it("wake() polls at once and restarts the interval", async () => {
+    const s = setup();
+    await s.sync.start(EVENT_POLL_MS);
+    await vi.advanceTimersByTimeAsync(EVENT_POLL_MS - 1000);
+    s.play(uprising);
+    await s.sync.wake();
+    expect(s.detector.read).toHaveBeenCalledTimes(2);
+    expect(s.sync.current).toEqual(uprising);
+    // The next regular poll is a full interval after the wake-up.
+    await vi.advanceTimersByTimeAsync(EVENT_POLL_MS - 1);
+    expect(s.detector.read).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(s.detector.read).toHaveBeenCalledTimes(3);
+  });
+
+  it("wake() during a poll reads again once that poll finishes", async () => {
+    const read = deferred<Track | null>();
+    const s = setup();
+    s.detector.read = vi.fn().mockReturnValueOnce(read.promise).mockResolvedValue(wonderwall);
+    const first = s.sync.poll();
+    const woken = s.sync.wake();
+    expect(s.detector.read).toHaveBeenCalledTimes(1);
+    read.resolve(uprising);
+    await first;
+    await woken;
+    expect(s.detector.read).toHaveBeenCalledTimes(2);
+    expect(s.sync.current).toEqual(wonderwall);
+  });
+
+  it("wake() before start() only polls", async () => {
+    const s = setup();
+    await s.sync.wake();
+    await vi.advanceTimersByTimeAsync(POLL_MS * 3);
+    expect(s.detector.read).toHaveBeenCalledTimes(1);
   });
 });
 

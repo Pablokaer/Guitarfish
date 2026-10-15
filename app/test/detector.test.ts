@@ -188,3 +188,65 @@ describe("permission", () => {
     expect(core.invoke).not.toHaveBeenCalled();
   });
 });
+
+describe("capabilities", () => {
+  it("reads them from the plugin", async () => {
+    core.invoke.mockResolvedValue({ transport: true, seek: true, volume: false, events: true });
+    expect(await setup().detector.capabilities()).toEqual({ transport: true, seek: true, volume: false, events: true });
+    expect(core.invoke).toHaveBeenCalledWith("plugin:nowplaying|get_capabilities");
+  });
+
+  it("treats fields an older plugin doesn't send as false", async () => {
+    core.invoke.mockResolvedValue({ transport: true, seek: true, volume: true });
+    expect(await setup().detector.capabilities()).toEqual({ transport: true, seek: true, volume: true, events: false });
+    core.invoke.mockResolvedValue({ transport: "yes" });
+    expect(await setup().detector.capabilities()).toEqual({ transport: false, seek: false, volume: false, events: false });
+  });
+
+  it("has none outside Tauri or when the command fails", async () => {
+    const none = { transport: false, seek: false, volume: false, events: false };
+    core.invoke.mockRejectedValue(new Error("unknown command"));
+    expect(await setup().detector.capabilities()).toEqual(none);
+    core.isTauri.mockReturnValue(false);
+    expect(await setup().detector.capabilities()).toEqual(none);
+  });
+});
+
+describe("waitForPermission", () => {
+  /** A document whose visibility the test controls. */
+  function fakeDocument() {
+    return Object.assign(new EventTarget(), { visibilityState: "visible" as DocumentVisibilityState });
+  }
+
+  it("returns false at once when access is already granted", async () => {
+    core.invoke.mockResolvedValue({ granted: true });
+    const onNeeded = vi.fn();
+    expect(await setup().detector.waitForPermission(onNeeded, fakeDocument())).toBe(false);
+    expect(onNeeded).not.toHaveBeenCalled();
+  });
+
+  it("asks, waits until the user returns with access granted, then returns true", async () => {
+    const s = setup();
+    const doc = fakeDocument();
+    const onNeeded = vi.fn();
+    core.invoke.mockResolvedValue({ granted: false });
+    let done = false;
+    const waiting = s.detector.waitForPermission(onNeeded, doc).then((r) => ((done = true), r));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onNeeded).toHaveBeenCalledTimes(1);
+    // Back without granting it: keep waiting.
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(done).toBe(false);
+    // Hidden: not checked.
+    core.invoke.mockResolvedValue({ granted: true });
+    doc.visibilityState = "hidden";
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(done).toBe(false);
+    doc.visibilityState = "visible";
+    doc.dispatchEvent(new Event("visibilitychange"));
+    // True tells the caller to reload capabilities: Android's controls need the access.
+    expect(await waiting).toBe(true);
+  });
+});
