@@ -1,12 +1,12 @@
 import * as alphaTab from "@coderline/alphatab";
+import { barAt, barStarts } from "./timeline";
 import type { TabInfo } from "./types";
 
 /**
  * Wraps alphaTab: renders a tab and follows a playback position.
  *
  * Following works by converting the song position (ms) into a bar index using the
- * score's tempo, then scrolling that bar into view and highlighting it. Repeats and
- * gradual tempo changes are not modelled yet (MVP).
+ * score's tempo (see timeline.ts), then scrolling that bar into view and highlighting it.
  */
 export class TabViewer {
   private api: alphaTab.AlphaTabApi;
@@ -73,34 +73,21 @@ export class TabViewer {
 
   /** Bar start times in ms, from time signatures and tempo automations. */
   private computeTimeline(score: alphaTab.model.Score): void {
-    const starts: number[] = [];
-    let tempo = score.tempo || 120;
-    let t = 0;
-    for (const mb of score.masterBars) {
-      const auto = mb.tempoAutomations?.[0];
-      if (auto && auto.value > 0) tempo = auto.value;
-      starts.push(t);
-      const ticks = mb.calculateDuration(); // 960 ticks per quarter note
-      t += (ticks / 960) * (60_000 / tempo);
-    }
-    this.barStartsMs = starts;
+    this.barStartsMs = barStarts(
+      score.tempo,
+      score.masterBars.map((mb) => ({ ticks: mb.calculateDuration(), tempo: mb.tempoAutomations?.[0]?.value })),
+    );
     this.currentBar = -1;
   }
 
   /** Scroll to and highlight the bar playing at `positionMs`. */
   follow(positionMs: number): void {
     if (!this.ready || this.barStartsMs.length === 0) return;
-    let lo = 0;
-    let hi = this.barStartsMs.length - 1;
-    while (lo < hi) {
-      const mid = (lo + hi + 1) >> 1;
-      if (this.barStartsMs[mid] <= positionMs) lo = mid;
-      else hi = mid - 1;
-    }
-    if (lo === this.currentBar) return;
-    this.currentBar = lo;
+    const bar = barAt(this.barStartsMs, positionMs);
+    if (bar === this.currentBar) return;
+    this.currentBar = bar;
 
-    const bounds = this.api.renderer.boundsLookup?.findMasterBarByIndex(lo);
+    const bounds = this.api.renderer.boundsLookup?.findMasterBarByIndex(bar);
     if (!bounds) return;
     const b = bounds.visualBounds;
     const scale = 1; // bounds are already in CSS pixels relative to the host
