@@ -27,7 +27,7 @@ import { pollIntervalFor, SyncController } from "./sync";
 import { ACCEPTED_EXTENSIONS, checkImport, MAX_TAB_BYTES, TOO_LARGE } from "./tabfile";
 import type { PlaybackCapabilities, Song, SongsterrResult, TabInfo, Track } from "./types";
 import { installUpdate, updateAction, updateNotice } from "./selfupdate";
-import { checkForUpdate, type UpdateInfo } from "./update";
+import { checkForUpdate, checkNow, type UpdateInfo } from "./update";
 import { TabViewer, type PlayerStatus } from "./viewer";
 
 /** How often a running app looks for a new release (also checked at startup). */
@@ -69,10 +69,12 @@ const el = {
   exitFocus: $<HTMLButtonElement>("btn-exit-focus"),
   // nav
   nav: $("nav"),
-  navItems: [...document.querySelectorAll<HTMLButtonElement>(".nav-item")],
+  navItems: [...document.querySelectorAll<HTMLButtonElement>(".nav-item[data-view]")],
   recent: $("recent"),
   navCompact: $<HTMLButtonElement>("btn-nav-compact"),
   navHide: $<HTMLButtonElement>("btn-nav-hide"),
+  navActions: $("nav-actions"),
+  checkUpdates: $<HTMLButtonElement>("btn-check-updates"),
   // toolbar
   toolbar: $("toolbar"),
   tbTitle: $("tb-title"),
@@ -1297,6 +1299,9 @@ function bindChrome() {
   el.toolbarShow.onclick = () => dispatch("toolbar");
   el.navCompact.onclick = () => dispatch("nav-compact");
   el.navHide.onclick = () => dispatch("nav");
+  // The installed version comes from Tauri, so a plain browser has nothing to check.
+  el.navActions.hidden = !isTauri();
+  el.checkUpdates.onclick = () => void checkUpdatesNow();
   el.fav.onclick = toggleFavoriteShown;
   el.refresh.onclick = () => void embed?.reload();
   el.external.onclick = () => {
@@ -1413,6 +1418,15 @@ async function announceUpdate(u: UpdateInfo) {
 
 /** Thin glue: the updater, relaunch and opener plugins behind selfupdate.installUpdate. */
 async function installInApp(u: UpdateInfo) {
+  setUpdateBusy(true);
+  try {
+    await runInstall(u);
+  } finally {
+    setUpdateBusy(false);
+  }
+}
+
+async function runInstall(u: UpdateInfo) {
   const outcome = await installUpdate(u, {
     check: async () => (await import("@tauri-apps/plugin-updater")).check(),
     relaunch: async () => (await import("@tauri-apps/plugin-process")).relaunch(),
@@ -1427,6 +1441,40 @@ async function checkUpdates() {
   if (!isTauri()) return;
   const u = await checkForUpdate({ currentVersion: await getVersion() });
   if (u) await announceUpdate(u);
+}
+
+/** While a check or an install runs, the sidebar button is disabled. */
+let updateBusy = false;
+function setUpdateBusy(busy: boolean) {
+  updateBusy = busy;
+  el.checkUpdates.disabled = busy;
+  el.checkUpdates.setAttribute("aria-busy", String(busy));
+}
+
+/** The sidebar button: checks now and, when there is a newer release, installs it right away. */
+async function checkUpdatesNow() {
+  if (updateBusy) return;
+  setUpdateBusy(true);
+  try {
+    showBanner("Checking for updates…");
+    const currentVersion = await getVersion();
+    const result = await checkNow({ currentVersion });
+    if (result.status === "error") {
+      showBanner("Couldn't check for updates. Check your internet connection and try again.", "warn");
+    } else if (result.status === "current") {
+      showBanner(`Guitarfish ${escapeHtml(currentVersion)} is the latest version.`);
+    } else if (updateAction({ tauri: isTauri(), userAgent: navigator.userAgent }) === "install") {
+      await runInstall(result.update);
+    } else {
+      await openExternal(result.update.url);
+      showBanner(`<b>${escapeHtml(result.update.name)}</b> is available: its release page opened in your browser.`);
+    }
+  } catch (e) {
+    console.warn("update check failed", e);
+    showBanner("Couldn't check for updates. Check your internet connection and try again.", "warn");
+  } finally {
+    setUpdateBusy(false);
+  }
 }
 
 // ---- Boot ------------------------------------------------------------------------
