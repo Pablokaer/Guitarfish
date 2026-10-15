@@ -6,7 +6,7 @@ const DAY = 24 * 60 * 60 * 1000;
 const BASE = "http://tabs.test";
 
 const track = (extra: Partial<Track> = {}): Track => ({ title: "Uprising", artist: "Muse", isPlaying: true, source: "os", player: "Spotify", ...extra });
-const tab: TabInfo = { id: 5, instrument: "guitar", tuning: null, format: "gp", version: 1, rating: null, isPlaceholder: false };
+const tab: TabInfo = { id: 5, format: "gp", name: "song.gp" };
 const song: Song = { id: 7, title: "Uprising", artist: "Muse", durationMs: 304_000, tabs: [tab] };
 const hit: LookupResponse = { match: song, confidence: 0.9, method: "fuzzy", candidates: [song] };
 const none: LookupResponse = { match: null, confidence: 0, method: "none", candidates: [] };

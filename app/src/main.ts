@@ -703,7 +703,7 @@ function fillTabSelect(tabs: TabInfo[], selected: number) {
     ...tabs.map((t, i) => {
       const o = document.createElement("option");
       o.value = String(t.id);
-      o.textContent = `${t.instrument} v${t.version}${t.isPlaceholder ? " (placeholder)" : ""}`;
+      o.textContent = t.name;
       o.selected = i === selected;
       return o;
     }),
@@ -819,9 +819,6 @@ async function openSong(song: Song, how: string) {
   }
   const first = song.tabs[0];
   fillTabSelect(song.tabs, 0);
-  if (first.isPlaceholder) {
-    showPanel(notice("Showing a <b>placeholder exercise</b>, not the real tab. Switch to <b>Songsterr</b> for the real one, or import your own tab."));
-  }
   try {
     await openTab(first);
   } catch (e) {
