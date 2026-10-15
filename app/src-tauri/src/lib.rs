@@ -43,6 +43,9 @@ pub fn run() {
             layout_menu(_app)?;
             Ok(())
         });
+    // In-app updates and the relaunch after them are desktop only.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build()).plugin(tauri_plugin_process::init());
     // Menus exist on desktop only (the Android build has no on_menu_event).
     #[cfg(desktop)]
     let builder = builder.on_menu_event(|app, event| {
