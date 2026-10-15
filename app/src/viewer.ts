@@ -1,12 +1,14 @@
 import * as alphaTab from "@coderline/alphatab";
-import { barAt, buildTimeline, type TimedBar } from "./timeline";
+import { scoreTimeline } from "./score";
+import { barAt, type TimedBar } from "./timeline";
 import type { TabInfo } from "./types";
 
 /**
  * Wraps alphaTab: renders a tab and follows a playback position.
  *
- * Following works by converting the song position (ms) into a bar index using the
- * score's tempo (see timeline.ts), then scrolling that bar into view and highlighting it.
+ * Following works by converting the song position (ms) into a master bar index using
+ * the score's play order and tempo map (see score.ts and timeline.ts), then scrolling
+ * that bar into view and highlighting it.
  */
 export class TabViewer {
   private api: alphaTab.AlphaTabApi;
@@ -71,16 +73,14 @@ export class TabViewer {
     this.highlight.hidden = true;
   }
 
-  /** Bar start times in ms, from time signatures and each bar's first tempo automation. */
+  /** Bar times in play order (repeats, endings and jumps expanded), with exact tempo changes. */
   private computeTimeline(score: alphaTab.model.Score): void {
-    let tick = 0;
-    const bars = score.masterBars.map((mb) => {
-      const startTick = tick;
-      tick += mb.calculateDuration();
-      return { index: mb.index, startTick, endTick: tick };
-    });
-    const tempos = score.masterBars.flatMap((mb, i) => (mb.tempoAutomations?.[0] ? [{ tick: bars[i].startTick, bpm: mb.tempoAutomations[0].value }] : []));
-    this.timeline = buildTimeline(bars, tempos, score.tempo);
+    try {
+      this.timeline = scoreTimeline(score);
+    } catch (e) {
+      console.warn("could not build the bar timeline", e);
+      this.timeline = [];
+    }
     this.currentBar = -1;
   }
 
