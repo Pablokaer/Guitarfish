@@ -19,7 +19,7 @@ import {
 import { EntryStore, isSongPage, PickStore, pushHistory, toEntry, toggleFavorite, toResult, type TabEntry } from "./library";
 import { isConfidentMatch, songsterrQuery, songsterrSearchPage } from "./match";
 import { clampSpeed, clampTranspose, cursorSource, PracticeStore, SPEED_PRESETS } from "./practice";
-import { loadSettings, saveSettings } from "./settings";
+import { dropLegacyStorage, loadSettings, saveSettings } from "./settings";
 import { syncStatus, type SyncStatus } from "./status";
 import "./styles.css";
 import { searchSongsterr } from "./songsterr";
@@ -146,7 +146,8 @@ document.documentElement.classList.toggle("platform-mac", nativeMac);
 
 // ---- Services ------------------------------------------------------------------
 const settings = loadSettings();
-saveSettings(settings); // persists the v2 migration
+saveSettings(settings); // persists the v2 migration and drops removed settings
+dropLegacyStorage();
 const detector = new Detector();
 const viewer = new TabViewer(el.tab, el.local, settings.zoom);
 const history = new EntryStore("tabsync.history");

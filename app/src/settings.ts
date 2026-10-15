@@ -35,7 +35,10 @@ export function parseSettings(raw: unknown): Settings {
   const defaults = defaultSettings();
   if (!raw || typeof raw !== "object") return defaults;
   const stored = raw as Partial<Settings>;
-  const s: Settings = { ...defaults, ...stored };
+  // Only known settings: older versions also saved serverUrl, spotifyFallback and librarySync.
+  const s = Object.fromEntries(
+    Object.entries(defaults).map(([k, v]) => [k, k in stored ? stored[k as keyof Settings] : v]),
+  ) as unknown as Settings;
   // v1 opened the local tab by default and Songsterr on request. Songsterr is now
   // the main viewer, so start there once; the user can still switch back.
   if (!((stored.version ?? 1) >= 2)) s.songsterrPanel = true;
@@ -50,6 +53,23 @@ export function loadSettings(): Settings {
     return parseSettings(raw ? JSON.parse(raw) : null);
   } catch {
     return defaultSettings();
+  }
+}
+
+/**
+ * Removes what older versions stored for the Guitarfish server: cached lookups
+ * (`tabsync.lookup.*`) and the library sync queue (`tabsync.library.*`).
+ */
+export function dropLegacyStorage(storage: Pick<Storage, "length" | "key" | "removeItem"> = localStorage): void {
+  try {
+    const legacy: string[] = [];
+    for (let i = 0; i < storage.length; i++) {
+      const k = storage.key(i);
+      if (k?.startsWith("tabsync.lookup.") || k?.startsWith("tabsync.library.")) legacy.push(k);
+    }
+    for (const k of legacy) storage.removeItem(k);
+  } catch {
+    /* storage unavailable: nothing to clean */
   }
 }
 
