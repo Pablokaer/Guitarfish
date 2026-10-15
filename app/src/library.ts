@@ -1,4 +1,10 @@
-import type { SongsterrResult } from "./types";
+import type { SongsterrResult, Track } from "./types";
+
+/** Stable identity of a track: the Spotify ID when known, else artist + title. */
+export function trackKey(t: Pick<Track, "title" | "artist" | "spotifyId">): string {
+  if (t.spotifyId) return `sp:${t.spotifyId}`;
+  return `at:${t.artist.toLowerCase().trim()}|${t.title.toLowerCase().trim()}`;
+}
 
 /** A Songsterr tab the user opened or saved. Only metadata and the link are kept. */
 export interface TabEntry {

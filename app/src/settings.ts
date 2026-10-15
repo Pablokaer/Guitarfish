@@ -1,6 +1,5 @@
 /** Per-device settings, kept in the webview's localStorage. */
 export interface Settings {
-  serverUrl: string;
   followOffsetSec: number;
   /** Local (alphaTab) tab: scroll to and highlight the bar being played. */
   follow: boolean;
@@ -19,14 +18,8 @@ export interface Settings {
 const KEY = "tabsync.settings";
 const VERSION = 2;
 
-function defaultServerUrl(): string {
-  // Android emulator reaches the host machine through 10.0.2.2.
-  return /android/i.test(navigator.userAgent) ? "http://10.0.2.2:8787" : "http://127.0.0.1:8787";
-}
-
 export function defaultSettings(): Settings {
   return {
-    serverUrl: defaultServerUrl(),
     followOffsetSec: 0,
     follow: true,
     zoom: 1,

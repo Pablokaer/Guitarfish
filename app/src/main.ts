@@ -3,7 +3,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { clearCachedLookup, TabApi } from "./api";
+import { Catalogue } from "./catalogue";
 import { Detector } from "./detector";
 import { EmbeddedPage } from "./embed";
 import { hydrateIcons, icon } from "./icons";
@@ -22,6 +22,7 @@ import { clampSpeed, clampTranspose, cursorSource, PracticeStore, SPEED_PRESETS 
 import { loadSettings, saveSettings } from "./settings";
 import { syncStatus, type SyncStatus } from "./status";
 import "./styles.css";
+import { searchSongsterr } from "./songsterr";
 import { pollIntervalFor, SyncController } from "./sync";
 import type { PlaybackCapabilities, Song, SongsterrResult, TabInfo, Track } from "./types";
 import { installUpdate, updateAction, updateNotice } from "./selfupdate";
@@ -134,8 +135,6 @@ const el = {
   layNavCompact: $<HTMLInputElement>("lay-nav-compact"),
   layToolbar: $<HTMLInputElement>("lay-toolbar"),
   layFocus: $<HTMLInputElement>("lay-focus"),
-  setServer: $<HTMLInputElement>("set-server"),
-  testBtn: $<HTMLButtonElement>("btn-test"),
 };
 
 // ---- Platform ------------------------------------------------------------------
@@ -148,18 +147,28 @@ document.documentElement.classList.toggle("platform-mac", nativeMac);
 // ---- Services ------------------------------------------------------------------
 const settings = loadSettings();
 saveSettings(settings); // persists the v2 migration
-const api = new TabApi(settings.serverUrl);
-api.setBaseUrl(settings.serverUrl);
 const detector = new Detector();
 const viewer = new TabViewer(el.tab, el.local, settings.zoom);
 const history = new EntryStore("tabsync.history");
 const favorites = new EntryStore("tabsync.favorites");
 const picks = new PickStore();
 const practice = new PracticeStore();
+
+let catalogueOpen: Promise<Catalogue> | null = null;
+/** The on-device tab catalogue (IndexedDB), opened on first use; a failed open is retried next time. */
+function catalogue(): Promise<Catalogue> {
+  catalogueOpen ??= Catalogue.open().catch((e: unknown) => {
+    catalogueOpen = null;
+    throw e;
+  });
+  return catalogueOpen;
+}
+
 /** Detector polling and the tab lookup for each new track; the UI below renders it. */
 const sync = new SyncController({
   detector,
-  api,
+  catalogue: { lookup: async (t) => (await catalogue()).lookup(t) },
+  songsterr: searchSongsterr,
   picks,
   settings,
   ui: {
@@ -174,10 +183,6 @@ const sync = new SyncController({
     },
     status: () => renderStatus(),
     openSongsterr: (r) => void openSongsterr(r, "auto"),
-    serverUnreachable: (down) => {
-      if (down) showBanner(`Can't reach the tab server at <code>${escapeHtml(settings.serverUrl)}</code>. Check it in the Tools sidebar. Retrying…`, "warn");
-      else if (el.banner.textContent?.includes("Can't reach the tab server")) showBanner(null);
-    },
     localMatch: (song, how) => openSong(song, how),
     localMiss: (track, candidates) => showLocalMiss(track, candidates),
     renderStage: () => renderStage(),
@@ -690,7 +695,7 @@ function fillTabSelect(tabs: TabInfo[], selected: number) {
 }
 
 async function openTab(tab: TabInfo) {
-  const { format, data } = await api.tab(tab);
+  const { format, data } = await (await catalogue()).tab(tab.id);
   currentTabId = tab.id;
   const p = practice.get(tab.id);
   viewer.setTranspose(p.transpose);
@@ -792,7 +797,7 @@ async function openSong(song: Song, how: string) {
   renderMatchInfo();
   if (song.tabs.length === 0) {
     viewer.clear();
-    showPanel(notice("This song has no tabs yet. Add one with <code>npm run import</code> on the server."));
+    showPanel(notice("This song has no tabs left. Import one from the Tools sidebar."));
     return;
   }
   const first = song.tabs[0];
@@ -829,7 +834,7 @@ function catalogueRows(track: Track | null, songs: Song[]): HTMLElement {
     b.onclick = async () => {
       if (track) {
         try {
-          await api.confirm(track, s);
+          await (await catalogue()).confirm(track, s);
         } catch (e) {
           console.warn("confirm failed", e);
         }
@@ -925,7 +930,7 @@ async function showSearch(query: string, correction: Track | null) {
     if (correction) sync.pick(correction, r);
     void openSongsterr(r, "manual");
   };
-  void api.songsterrSearch(query).then(
+  void searchSongsterr(query).then(
     (rs) => {
       if (seq !== searchSeq) return;
       const rows = songsterrRows(rs, pickSongsterr);
@@ -942,14 +947,17 @@ async function showSearch(query: string, correction: Track | null) {
       slotS.innerHTML = `<ul class="rows"><li class="empty-row">Search failed: ${escapeHtml(String(e))}</li></ul>`;
     },
   );
-  void api.search(query).then(
-    (r) => {
-      if (seq === searchSeq) slotL.replaceChildren(catalogueRows(correction, r.results));
-    },
-    () => {
-      if (seq === searchSeq) slotL.innerHTML = `<ul class="rows"><li class="empty-row">Tab server unreachable.</li></ul>`;
-    },
-  );
+  void catalogue()
+    .then((c) => c.search(query))
+    .then(
+      (songs) => {
+        if (seq === searchSeq) slotL.replaceChildren(catalogueRows(correction, songs));
+      },
+      (e) => {
+        console.warn("catalogue search failed", e);
+        if (seq === searchSeq) slotL.innerHTML = `<ul class="rows"><li class="empty-row">Couldn't read the local tab catalogue.</li></ul>`;
+      },
+    );
 }
 
 function renderEntryPage(kind: "history" | "favorites") {
@@ -1013,7 +1021,6 @@ function bindTools() {
   el.setFollowSpotify.checked = settings.followSpotify;
   el.setAutoSearch.checked = settings.autoSearch;
   el.setFollow.checked = settings.follow;
-  el.setServer.value = settings.serverUrl;
   el.setOffset.value = String(settings.followOffsetSec);
   el.setOffsetOut.textContent = `${settings.followOffsetSec.toFixed(1)} s`;
   el.setZoom.value = String(settings.zoom);
@@ -1031,21 +1038,6 @@ function bindTools() {
     settings.autoSearch = el.setAutoSearch.checked;
     saveSettings(settings);
     if (settings.autoSearch && sync.current && sync.phase === "paused") void sync.searchCurrent();
-  };
-  el.setServer.onchange = () => {
-    settings.serverUrl = el.setServer.value.trim().replace(/\/+$/, "");
-    api.setBaseUrl(settings.serverUrl);
-    saveSettings(settings);
-    sync.relookup(); // look the current song up again on the new server
-  };
-  el.testBtn.onclick = async () => {
-    try {
-      await api.health();
-      el.testBtn.textContent = "OK ✓";
-    } catch {
-      el.testBtn.textContent = "Unreachable";
-    }
-    setTimeout(() => (el.testBtn.textContent = "Test"), 2500);
   };
   el.setTheme.onchange = () => {
     settings.theme = el.setTheme.value === "midnight" ? "midnight" : "graphite";
@@ -1078,7 +1070,6 @@ function bindTools() {
   el.searchAgain.onclick = () => void sync.searchAgain();
   el.wrong.onclick = () => {
     if (!sync.current) return;
-    clearCachedLookup(sync.current);
     void showSearch(songsterrQuery(sync.current), sync.current);
   };
   el.openSongsterr.onclick = () => {
