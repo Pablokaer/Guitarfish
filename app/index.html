@@ -176,6 +176,27 @@
                 <input id="set-offset" type="range" min="-5" max="5" step="0.1" value="0" /></label>
               <label class="range-row">Zoom <output id="set-zoom-out">100%</output>
                 <input id="set-zoom" type="range" min="0.6" max="1.6" step="0.1" value="1" /></label>
+
+              <div class="card-sub">Practice</div>
+              <div class="kv"><span>Tuning</span><span id="pr-tuning" class="tuning">—</span></div>
+              <label class="range-row">Transpose <output id="pr-transpose-out">0</output>
+                <input id="pr-transpose" type="range" min="-12" max="12" step="1" value="0" /></label>
+              <div class="practice-row">
+                <button id="pr-transpose-down" class="btn small" type="button" aria-label="Transpose down a semitone">−1</button>
+                <button id="pr-transpose-up" class="btn small" type="button" aria-label="Transpose up a semitone">+1</button>
+                <button id="pr-transpose-reset" class="btn small" type="button">Reset</button>
+              </div>
+              <p class="hint">Shifts the notation and the built-in player. Tab frets stay as written.</p>
+              <div class="practice-transport">
+                <button id="pr-play" class="play-btn" type="button" title="Play the tab" aria-label="Play the tab"><i data-icon="play" data-size="16"></i></button>
+                <button id="pr-stop" class="icon-btn small" type="button" title="Stop" aria-label="Stop" disabled><i data-icon="stop" data-size="16"></i></button>
+                <span id="pr-state" class="muted">Built-in player</span>
+              </div>
+              <label class="range-row">Speed <output id="pr-speed-out">100%</output>
+                <input id="pr-speed" type="range" min="0.25" max="2" step="0.05" value="1" /></label>
+              <div id="pr-speed-presets" class="segmented" role="group" aria-label="Speed presets"></div>
+              <label class="switch-row"><span>Loop<small>Drag across bars to loop only those</small></span><input id="pr-loop" type="checkbox" class="switch" /></label>
+              <button id="pr-clear-selection" class="btn small" type="button" hidden>Clear selection</button>
             </section>
 
             <section class="card">

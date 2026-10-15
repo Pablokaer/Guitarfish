@@ -33,14 +33,14 @@ Guitarfish runs alongside Spotify. When the song changes, it detects the new tra
 |---|---|---|
 | App shell | [Tauri 2](https://v2.tauri.app) (Rust) | Native window, menus, IPC between the UI and native code, installers for macOS / Windows / Linux / Android. The `unstable` feature enables the child webviews used for Songsterr. |
 | App UI | TypeScript + [Vite 7](https://vite.dev), no UI framework | Plain DOM code: detector loop, layout, sidebars, Spotify player, settings. |
-| Tab rendering | [alphaTab](https://alphatab.net) (`@coderline/alphatab` + its Vite plugin) | Renders alphaTex, Guitar Pro 3–7 and MusicXML; Guitarfish adds bar-follow on top. |
+| Tab rendering | [alphaTab](https://alphatab.net) (`@coderline/alphatab` + its Vite plugin) | Renders alphaTex, Guitar Pro 3–7 and MusicXML, and plays them with its built-in synthesizer (practice tools). Guitarfish adds bar-follow on top, using alphaTab's play order. |
 | Song detection | Custom Tauri plugin `tauri-plugin-nowplaying` | Rust on desktop (AppleScript and an `objc2` notification observer on macOS, the `windows` crate's WinRT SMTC bindings on Windows, `zbus` MPRIS on Linux), Kotlin on Android. |
 | External links | `@tauri-apps/plugin-opener` | Opens pages in the system browser (Songsterr on Android, fallbacks). |
 | Notifications | `@tauri-apps/plugin-notification` | System notification when a new release is out. |
 | Server | Node 20+, TypeScript run by `tsx`, [Fastify 5](https://fastify.dev) + `@fastify/cors` | HTTP API: song matching, tab storage, Songsterr search proxy, Spotify OAuth. |
 | Database | SQLite via `better-sqlite3` (WAL mode) | Songs, tabs (stored as BLOBs), confirmed Spotify IDs, Spotify tokens. File at `server/data/tabsync.db`. |
 | External services | Spotify Web API (OAuth Authorization Code + PKCE), Songsterr public search | Optional now-playing fallback; finding Songsterr pages. |
-| Tests | [Vitest](https://vitest.dev) (server + app), `cargo test` (plugin) | Unit tests for matching, normalization, API routes, layout, settings, library and status logic. |
+| Tests | [Vitest](https://vitest.dev) (server + app), `cargo test` (plugin) | Unit tests for matching, normalization, API routes, layout, settings, library, status, follow timeline and practice logic. |
 | E2E tests | [Playwright](https://playwright.dev) (Chromium) | Drives the built UI in a browser against a faked server and Spotify: song changes, local tabs, search, history, favorites, layout, settings, server outages. |
 | CI / CD | GitHub Actions, `tauri-apps/tauri-action` | Typecheck + tests on every push; release builds of `.dmg`, `.msi`/`.exe`, `.AppImage`/`.deb` and `.apk`. |
 
@@ -89,10 +89,13 @@ The app and the server are separate programs. The server can run on the same com
   - `detector.ts` combines the device reading with the Web API fallback, and reads the plugin's capabilities.
   - `api.ts` is the HTTP client. It caches confident lookups in `localStorage` for 7 days.
   - `match.ts` cleans Spotify titles and decides whether a Songsterr result is really the same song.
-  - `viewer.ts` wraps alphaTab.
+  - `viewer.ts` wraps alphaTab: rendering, bar-follow and the built-in player used by the practice tools.
+  - `score.ts` reads a loaded score without the DOM: its play order (through alphaTab's MIDI generator), and each track's tuning and capo.
+  - `timeline.ts` turns the play order and tempo changes into bar times and finds the bar at a song position.
+  - `practice.ts` holds the practice-tool logic: transpose and speed limits, tuning names, which cursor drives the view, and the per-tab settings store.
   - `embed.ts` positions the native Songsterr webview.
-  - `layout.ts`, `settings.ts`, `library.ts` (history and favorites) and `status.ts` are pure state modules, each with unit tests.
-  - Per-device state lives in the webview's `localStorage`: settings, layout, history, favorites, pending library changes and "Wrong tab?" picks. History and favorites are also synced through the server (see *Sync*, below); `localStorage` is their offline copy.
+  - `layout.ts`, `settings.ts`, `library.ts` (history and favorites), `status.ts`, `timeline.ts` and `practice.ts` are pure modules, each with unit tests.
+  - Per-device state lives in the webview's `localStorage`: settings, layout, history, favorites, pending library changes, "Wrong tab?" picks and practice settings per local tab (`tabsync.practice`). History and favorites are also synced through the server (see *Sync*, below); `localStorage` is their offline copy.
 
 ### The server
 
@@ -133,7 +136,16 @@ The app and the server are separate programs. The server can run on the same com
    A score of 0.82 or higher opens the tab automatically. Below that, the app lists candidates (score ≥ 0.35) and a search box. When the user picks a song, the Spotify ID is saved, so the next lookup is an exact hit.
 5. **Show.**
    - **Songsterr view** (desktop default): Songsterr refuses iframes, so the page opens in a native child webview laid over the viewer area. Moving or resizing panels only repositions that webview; it never reloads the page.
-   - **Local view:** alphaTab renders the tab. **Follow** builds a timeline of bar start times from the tab's time signatures and tempo, finds the bar at the current song position (plus your offset), highlights it and scrolls it into the upper third of the view.
+   - **Local view:** alphaTab renders the tab. **Follow** works out which bar is playing:
+     1. When a tab loads, `score.ts` runs alphaTab's MIDI generator (no audio, no DOM) and reads its tick lookup. That gives the bars in the order they are played, with repeats, alternate endings and D.C. / D.S. / Coda / Fine jumps expanded, plus every tempo change at its exact tick, including changes in the middle of a bar.
+     2. `timeline.ts` turns this into a tempo map and the start and end time of each played bar.
+     3. Every frame, the bar at the current song position (plus your offset) is highlighted and scrolled into the upper third of the view. A repeated chorus maps back to the same bars on each pass.
+   - **Practice tools** (Tools sidebar → *Local tab* → *Practice*, desktop and Android):
+     - **Tuning:** the shown track's open strings, low to high (e.g. `D A D G B E`), with its name when it is a known one (*Standard*, *Drop D*, *Half step down*, *Open G*, *DADGAD*…) and the capo, if any.
+     - **Transpose** −12…+12 semitones, with *Reset*. It shifts the standard notation and the built-in player; tab fret numbers stay as written.
+     - **Built-in player:** play/pause and stop, speed 25–200% (slider or presets), and *Loop*, which repeats the whole tab or only the bars you select by dragging across them. The sound font (`soundfont/sonivox.sf3`, copied by alphaTab's Vite plugin) is fetched on the first *Play*.
+     - While the built-in player plays, its own cursor moves through the tab and Spotify follow pauses. When you pause or stop it, the view follows Spotify again.
+     - Transpose and speed are saved for each local tab (by tab ID) in `tabsync.practice`.
 6. **Control** (desktop): the Spotify player strip shows artwork, progress and volume. It drives Spotify through `plugin:nowplaying|control`: AppleScript on macOS (transport, seek, volume), SMTC on Windows (transport and seek; SMTC has no volume control) and MPRIS on Linux (transport, seek, volume). On Android the plugin drives Spotify's `MediaController` (transport and seek) once Notification access is granted.
 7. **Sync.** History and favorites are shared by every device that uses the same server (Tools → *Sync history & favorites*, on by default).
    - Each local change updates the `localStorage` lists at once and is queued in `tabsync.library.pending`: opening a tab queues the entry with the current time, saving a favorite queues the entry, unsaving it or clearing history queues a `{ songId, deletedAt }` removal. The queue keeps one change per song (the newest), so it survives restarts and offline use without growing.
@@ -332,7 +344,7 @@ The server requests the scopes `user-read-currently-playing` and `user-read-play
 
 ## Known MVP limitations / next steps
 
-- Follow mode ignores repeats, and tempo changes only take effect at bar boundaries. Use the offset slider to compensate. *Next: a real tempo map, or alphaTab's external-media sync.*
+- Follow mode assumes Spotify plays the song as written in the tab. Live versions, edits or a different tempo drift; use the offset slider to compensate. *Next: alphaTab's sync points to align the tab with a recording.*
 - Fuzzy matching scans every song in memory, which is fine up to a few tens of thousands of songs. *Next: Postgres + `pg_trgm`, which uses the same similarity metric.*
 - Platforms without playback events (Windows, Android) poll the detector every second.
 - Windows, Linux and Android support only Spotify. Removing the package, app-ID or bus-name filter would allow other players.
