@@ -54,17 +54,25 @@ jobs:
       - run: npm run build
 
   rust:
-    # macOS runs the AppleScript parser tests; Windows compiles the SMTC code.
+    # macOS runs the AppleScript parser tests; Windows compiles the SMTC code;
+    # Linux compiles the MPRIS (D-Bus) code. The MPRIS mapping tests run everywhere.
     # Clippy also compiles both crates, so it replaces a separate `cargo check`.
     # The Android code is checked by rust-android below.
     name: Rust tests + clippy (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        os: [macos-latest, windows-latest, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+      # Tauri's Linux build dependencies (WebKitGTK, GTK, D-Bus, ...).
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            libxdo-dev libssl-dev libdbus-1-dev patchelf build-essential file
       - uses: actions/setup-node@v7
         with:
           node-version: 22
