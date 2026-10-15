@@ -10,6 +10,22 @@ export interface TabEntry {
   at: number;
 }
 
+/** A tab removed from a list (unsaved, or history cleared), as synced to the server. */
+export interface Removal {
+  songId: number;
+  /** Epoch ms of the removal. */
+  deletedAt: number;
+}
+
+/** One change to a synced list: an entry added or bumped, or a removal. */
+export type Change = TabEntry | Removal;
+
+/** History and favorites as the server returns them, newest first. */
+export interface LibraryLists {
+  history: TabEntry[];
+  favorites: TabEntry[];
+}
+
 export const HISTORY_LIMIT = 50;
 
 /** Search pages ("search “…”") have no songId and are not worth remembering. */
@@ -36,7 +52,7 @@ export function toggleFavorite(list: TabEntry[], entry: TabEntry): TabEntry[] {
     : [entry, ...list];
 }
 
-function isEntry(v: unknown): v is TabEntry {
+export function isEntry(v: unknown): v is TabEntry {
   const e = v as TabEntry;
   return !!e && typeof e.url === "string" && typeof e.songId === "number" && typeof e.title === "string" && typeof e.artist === "string" && typeof e.at === "number";
 }
