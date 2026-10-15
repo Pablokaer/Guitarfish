@@ -39,7 +39,7 @@ class NowPlayingPlugin(private val activity: Activity) : Plugin(activity) {
         invoke.resolve(ret)
     }
 
-    /** Opens the system "Notification access" screen. The user toggles TabSync on. */
+    /** Opens the system "Notification access" screen. The user toggles Guitarfish on. */
     @Command
     fun requestPermission(invoke: Invoke) {
         if (!hasAccess()) {

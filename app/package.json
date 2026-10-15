@@ -1,6 +1,6 @@
 {
   "name": "@tabsync/app",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,6 +12,7 @@
   "dependencies": {
     "@coderline/alphatab": "^1.8.0",
     "@tauri-apps/api": "^2.10.0",
+    "@tauri-apps/plugin-notification": "^2.7.0",
     "@tauri-apps/plugin-opener": "^2.5.0"
   },
   "devDependencies": {

@@ -1,9 +1,9 @@
 {
   "name": "@tabsync/server",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
-  "description": "TabSync tab lookup API: song matching, tab storage and an optional Spotify Web API fallback.",
+  "description": "Guitarfish tab lookup API: song matching, tab storage and an optional Spotify Web API fallback.",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",

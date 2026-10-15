@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sets the TabSync version everywhere it is recorded, lockfiles included:
+# Sets the Guitarfish version everywhere it is recorded, lockfiles included:
 #   scripts/bump-version.sh 0.3.0
 # Then commit, and tag the commit `v<version>` to release it (see README).
 set -euo pipefail

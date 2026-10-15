@@ -9,7 +9,7 @@ export type DetectorStatus =
 
 /**
  * Combines the on-device detector (Tauri plugin) with the optional Spotify Web API
- * fallback served by the TabSync server.
+ * fallback served by the Guitarfish server.
  */
 export class Detector {
   private lastFallbackAt = 0;

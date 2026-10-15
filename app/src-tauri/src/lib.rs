@@ -35,6 +35,7 @@ fn layout_menu<R: tauri::Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_nowplaying::init())
         .setup(|_app| {
@@ -50,5 +51,5 @@ pub fn run() {
             let _ = app.emit_to("main", "layout-command", cmd);
         }
     });
-    builder.run(tauri::generate_context!()).expect("error while running TabSync");
+    builder.run(tauri::generate_context!()).expect("error while running Guitarfish");
 }

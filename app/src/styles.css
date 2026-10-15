@@ -1,5 +1,5 @@
 /* ==========================================================================
-   TabSync shell. The Songsterr page is a native webview laid over #embed-area,
+   Guitarfish shell. The Songsterr page is a native webview laid over #embed-area,
    so nothing here may overlap that element: every control lives in the panels
    around it, and tooltips use the native `title` attribute.
    ========================================================================== */
@@ -213,7 +213,7 @@ kbd { display: inline-block; min-width: 18px; padding: 1px 5px; border-radius: 4
 .nav[data-state="compact"] .label, .nav[data-state="compact"] .recent { opacity: 0; pointer-events: none; }
 
 .brand { display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 8px; margin-bottom: 14px; }
-.brand-mark { flex: none; width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center; color: var(--accent-ink); background: linear-gradient(135deg, #2bea70, #14a84a); box-shadow: 0 2px 8px rgb(30 215 96 / 0.3); }
+.brand-mark { flex: none; width: 24px; height: 24px; object-fit: contain; }
 .brand-name { font-weight: 700; font-size: 14px; letter-spacing: -0.01em; }
 .brand .panel-hide { margin-left: auto; }
 /* Compact: the hide button takes the logo's place, so it stays reachable. */
@@ -273,6 +273,7 @@ kbd { display: inline-block; min-width: 18px; padding: 1px 5px; border-radius: 4
 .banner { flex: none; display: flex; align-items: center; gap: 10px; padding: 7px 14px; font-size: 12.5px; border-bottom: 1px solid var(--border); background: var(--elevated); }
 .banner.warn { background: #2a2312; color: #ffd68f; border-bottom-color: #4a3c1b; }
 .banner code { background: #0006; padding: 1px 5px; border-radius: 4px; }
+.banner .btn { margin-left: 8px; padding: 2px 10px; font-size: 12px; }
 .banner .banner-close { margin-left: auto; color: inherit; opacity: 0.7; }
 
 .stage { position: relative; flex: 1; min-height: 0; min-width: 0; }

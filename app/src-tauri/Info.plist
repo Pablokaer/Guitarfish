@@ -2,8 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <!-- Shown by macOS the first time TabSync asks Spotify what is playing. -->
+  <!-- Shown by macOS the first time Guitarfish asks Spotify what is playing. -->
   <key>NSAppleEventsUsageDescription</key>
-  <string>TabSync asks Spotify which song is playing so it can show the matching tab.</string>
+  <string>Guitarfish asks Spotify which song is playing so it can show the matching tab.</string>
 </dict>
 </plist>

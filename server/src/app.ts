@@ -179,7 +179,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       await spotify.handleCallback(db, opts.spotify, code, state);
       return reply
         .type("text/html")
-        .send("<h3>Spotify connected.</h3><p>You can close this tab and return to TabSync.</p>");
+        .send("<h3>Spotify connected.</h3><p>You can close this tab and return to Guitarfish.</p>");
     },
   );
 
