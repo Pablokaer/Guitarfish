@@ -84,7 +84,7 @@ jobs:
           if [ -n "$existing" ]; then
             id=$(cut -f1 <<<"$existing"); draft=$(cut -f2 <<<"$existing")
             if [ "$draft" != "true" ]; then
-              echo "::error::Release $TAG is already published. Bump the version in app/src-tauri/tauri.conf.json (and app/src-tauri/Cargo.toml) first."
+              echo "::error::Release $TAG is already published. Bump the version first: scripts/bump-version.sh <new version>"
               exit 1
             fi
             echo "Reusing draft release $id"

@@ -255,17 +255,19 @@ The server requests the scopes `user-read-currently-playing` and `user-read-play
 - **CI** (`.github/workflows/ci.yml`) runs on every push and pull request:
   - server typecheck and tests;
   - app typecheck, tests and build;
-  - plugin tests and `cargo clippy -D warnings` on macOS and Windows (each OS compiles different detector code).
+  - plugin tests and `cargo clippy -D warnings` on macOS and Windows (each OS compiles different detector code);
+  - `cargo clippy` for the Android target, so the `#[cfg(mobile)]` code is checked before a release.
 - **Code review** (`.github/workflows/code-review.yml`) also runs on every push and pull request:
   - `cargo fmt --check`. The rules are in `rustfmt.toml`; run `cargo fmt` before pushing.
   - `npm audit` of the server's and the app's runtime dependencies. It fails on high or critical advisories.
-- **AI review** (`.github/workflows/ai-review.yml`): on pull requests, [Claude Code](https://github.com/anthropics/claude-code-action) posts inline comments and a summary.
-  - It's advisory: it never fails the PR.
-  - It only runs when the repository secret `ANTHROPIC_API_KEY` is set.
+- **AI review** (`.github/workflows/ai-review.yml`): [Claude Code](https://github.com/anthropics/claude-code-action) reviews a pull request when it is opened, reopened or marked ready. It posts inline comments and one summary comment.
+  - To review new pushes, add the `ai-review` label. The summary comment is updated in place, not posted again.
+  - It's advisory: it never fails the PR. A failed review shows a warning on the workflow run.
+  - It only runs when the repository secret `ANTHROPIC_API_KEY` is set, and the [Claude GitHub App](https://github.com/apps/claude) must be installed on the repository.
   - It's the only workflow with write access to pull requests.
 - **Release** (`.github/workflows/release.yml`) first runs CI and Code review on the tagged commit with read-only tokens, and stops if either fails. Then it builds the installable apps and attaches them to a GitHub release: a universal `.dmg` for macOS, `.msi` and `.exe` installers for Windows, and a universal `.apk` for Android.
-  1. Set the new version in `app/src-tauri/tauri.conf.json`, `app/src-tauri/Cargo.toml`, the plugin's `Cargo.toml` and both `package.json` files.
-  2. Push a matching tag: `git tag v0.2.0 && git push origin v0.2.0`. Every build runs, and the release is published when all succeed.
+  1. Set the new version with `scripts/bump-version.sh 0.3.0`. It updates `tauri.conf.json`, both `Cargo.toml` files, both `package.json` files and all four lockfiles. Commit the result.
+  2. Push a matching tag: `git tag v0.3.0 && git push origin v0.3.0`. Every build runs, and the release is published when all succeed.
 
   You can also run *Release* by hand from the Actions tab:
   - By default it builds into a **draft** release, and publishes it only if you tick *publish*.

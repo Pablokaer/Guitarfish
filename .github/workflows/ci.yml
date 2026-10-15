@@ -56,6 +56,7 @@ jobs:
   rust:
     # macOS runs the AppleScript parser tests; Windows compiles the SMTC code.
     # Clippy also compiles both crates, so it replaces a separate `cargo check`.
+    # The Android code is checked by rust-android below.
     name: Rust tests + clippy (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -79,13 +80,47 @@ jobs:
             app/plugins/tauri-plugin-nowplaying
       # tauri::generate_context! needs the built frontend (frontendDist).
       - name: Build frontend
+        id: frontend
         working-directory: app
         run: |
           npm ci
           npm run build
       - name: Plugin tests
         run: cargo test --manifest-path app/plugins/tauri-plugin-nowplaying/Cargo.toml
+      # Runs even when a test fails, so one push reports both.
       - name: Clippy
+        if: ${{ !cancelled() && steps.frontend.outcome == 'success' }}
         run: |
           cargo clippy --manifest-path app/plugins/tauri-plugin-nowplaying/Cargo.toml --all-targets -- -D warnings
           cargo clippy --manifest-path app/src-tauri/Cargo.toml --all-targets -- -D warnings
+
+  rust-android:
+    # Compiles and lints the #[cfg(mobile)] code, which otherwise is only built by
+    # a release. `cargo clippy` doesn't link, so no NDK is needed.
+    name: Rust clippy (Android)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            app/src-tauri
+            app/plugins/tauri-plugin-nowplaying
+      - name: Build frontend
+        working-directory: app
+        run: |
+          npm ci
+          npm run build
+      - name: Clippy
+        run: |
+          cargo clippy --manifest-path app/plugins/tauri-plugin-nowplaying/Cargo.toml --target aarch64-linux-android --all-targets -- -D warnings
+          cargo clippy --manifest-path app/src-tauri/Cargo.toml --target aarch64-linux-android --all-targets -- -D warnings
