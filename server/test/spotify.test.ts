@@ -163,6 +163,13 @@ describe("handleCallback", () => {
     expect(calls).toEqual([]);
   });
 
+  it("rejects a state older than 10 minutes even if no other login started", async () => {
+    const state = login().get("state")!;
+    clock += 10 * 60_000 + 1;
+    await expect(handleCallback(db, cfg, "code", state)).rejects.toThrow(/Unknown or expired/);
+    expect(calls).toEqual([]);
+  });
+
   it("stores nothing when Spotify refuses the code", async () => {
     const state = login().get("state")!;
     responses.push(json({ error: "invalid_grant" }, 400));
@@ -342,5 +349,22 @@ describe("Spotify routes", () => {
     expect(res.statusCode).toBe(400);
     expect(res.body).toContain("access_denied");
     expect(calls).toEqual([]);
+  });
+
+  it("answers an unknown or expired state with 400, not a server error", async () => {
+    const res = await app().inject({ method: "GET", url: "/auth/spotify/callback", query: { code: "c", state: "nope" } });
+    expect(res.statusCode).toBe(400);
+    expect(res.headers["content-type"]).toContain("text/html");
+    expect(res.body).toContain("Start the login again");
+  });
+
+  it("escapes the error Spotify passes back", async () => {
+    const res = await app().inject({
+      method: "GET",
+      url: "/auth/spotify/callback",
+      query: { error: "<script>alert(1)</script>" },
+    });
+    expect(res.body).not.toContain("<script>");
+    expect(res.body).toContain("&lt;script&gt;");
   });
 });
