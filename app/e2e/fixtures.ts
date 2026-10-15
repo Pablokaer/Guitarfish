@@ -134,8 +134,8 @@ export class FakeServer {
   }
 
   private searchSongsterr(q: string): SongsterrResult[] {
-    const text = q.toLowerCase();
-    return this.songsterr.filter((r) => text.includes(r.title.toLowerCase()) || text.includes(r.artist.toLowerCase()));
+    const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+    return this.songsterr.filter((r) => words.some((w) => `${r.artist} ${r.title}`.toLowerCase().includes(w)));
   }
 
   /** Same contract as the real server: apply entries and removals, reply with the live lists. */
