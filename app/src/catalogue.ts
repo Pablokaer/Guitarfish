@@ -1,5 +1,6 @@
+import { lookup, search } from "./matching";
 import { normalizeArtist, normalizeTitle } from "./normalize";
-import type { Song, TabFormat, TabInfo } from "./types";
+import type { LookupResponse, Song, TabFormat, TabInfo, Track } from "./types";
 
 /**
  * The local tab catalogue: songs, their imported tab files and the Spotify tracks
@@ -36,6 +37,13 @@ interface TabRecord {
 interface FileRecord {
   id: number;
   data: ArrayBuffer;
+}
+
+/** A Spotify track the user confirmed as this song. */
+interface LinkRecord {
+  provider: "spotify";
+  externalId: string;
+  songId: number;
 }
 
 /** A tab file to add, and the song it belongs to. */
@@ -151,6 +159,43 @@ export class Catalogue {
     const [t, f] = await Promise.all([req<TabRecord | undefined>(store("tabs").get(id)), req<FileRecord | undefined>(store("files").get(id))]);
     if (!t || !f) throw new Error(`Tab ${id} is not in the catalogue`);
     return { format: t.format, data: f.data };
+  }
+
+  /** Every song with its tabs, and the song confirmed for `spotifyId` (if any). */
+  private async loadForMatching(spotifyId?: string | null): Promise<{ songs: Song[]; linked: Song | null }> {
+    const { store } = this.tx(["songs", "tabs", "links"]);
+    const [records, tabs, link] = await Promise.all([
+      req<SongRecord[]>(store("songs").getAll()),
+      req<TabRecord[]>(store("tabs").getAll()),
+      spotifyId ? req<LinkRecord | undefined>(store("links").get(["spotify", spotifyId])) : Promise.resolve(undefined),
+    ]);
+    const songs = records.map((s) => toSong(s, tabs));
+    return { songs, linked: songs.find((s) => s.id === link?.songId) ?? null };
+  }
+
+  /**
+   * The catalogue song for a playing track (see matching.lookup): the song the
+   * user confirmed for its Spotify ID, else an exact, else a fuzzy match.
+   * Without a confident match, `candidates` are the closest songs.
+   */
+  async lookup(t: Pick<Track, "title" | "artist" | "durationMs" | "spotifyId">): Promise<LookupResponse> {
+    const { songs, linked } = await this.loadForMatching(t.spotifyId);
+    const r = lookup(songs, { title: t.title, artist: t.artist, durationMs: t.durationMs }, linked);
+    return { match: r.match, confidence: r.confidence, method: r.method, candidates: r.candidates.map((c) => ({ ...c.song, score: c.score })) };
+  }
+
+  /** The user picked `song` for the playing track: the next lookup of it finds that song. */
+  async confirm(t: Pick<Track, "spotifyId">, song: Pick<Song, "id">): Promise<void> {
+    if (!t.spotifyId) return;
+    const { tx, store } = this.tx(["links"], "readwrite");
+    await req(store("links").put({ provider: "spotify", externalId: t.spotifyId, songId: song.id } satisfies LinkRecord));
+    await committed(tx);
+  }
+
+  /** Free-text search over titles and artists, best first. */
+  async search(text: string): Promise<Song[]> {
+    const { songs } = await this.loadForMatching();
+    return search(songs, text).map((r) => ({ ...r.song, score: r.score }));
   }
 
   /** Deletes a tab; a song left without tabs goes too, with its confirmed tracks. */

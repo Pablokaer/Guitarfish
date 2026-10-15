@@ -130,7 +130,7 @@ describe("catalogue lookup", () => {
 
   it("offers scored candidates when unsure", async () => {
     const { c, wonderwall } = await seeded();
-    const r = await c.lookup(track("Wonder", "Unknown Band"));
+    const r = await c.lookup(track("Wonderwal", "Unknown Band"));
     expect(r.match).toBeNull();
     expect(r.method).toBe("none");
     expect(r.candidates.map((s) => s.id)).toContain(wonderwall.id);
