@@ -1,8 +1,9 @@
 name: Code review
 
-# Automated review: formatting, lints and dependency audit on every push and pull
-# request (blocking), plus an AI review comment on pull requests when the
-# ANTHROPIC_API_KEY secret is set (advisory). Also called by release.yml.
+# Blocking review checks on every push and pull request: Rust formatting and a
+# dependency audit. Clippy runs in ci.yml, where the crates are already built.
+# The advisory AI review of pull requests is in ai-review.yml. Also called by
+# release.yml.
 
 on:
   push:
@@ -11,51 +12,26 @@ on:
   workflow_dispatch:
   workflow_call:
 
+# github.workflow is the caller's name when release.yml calls this (see ci.yml).
 concurrency:
-  group: code-review-${{ github.ref }}
+  group: code-review-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  rust:
-    # Each OS compiles different detector code, so lint both.
-    name: Rust fmt + clippy (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+  rustfmt:
+    name: Rust formatting
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: app/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            app/src-tauri
-            app/plugins/tauri-plugin-nowplaying
-      - name: rustfmt
-        run: |
-          cargo fmt --check --manifest-path app/plugins/tauri-plugin-nowplaying/Cargo.toml
-          cargo fmt --check --manifest-path app/src-tauri/Cargo.toml
-      # tauri::generate_context! needs the built frontend (frontendDist).
-      - name: Build frontend
-        working-directory: app
-        run: |
-          npm ci
-          npm run build
-      - name: clippy
-        run: |
-          cargo clippy --manifest-path app/plugins/tauri-plugin-nowplaying/Cargo.toml --all-targets -- -D warnings
-          cargo clippy --manifest-path app/src-tauri/Cargo.toml --all-targets -- -D warnings
+          components: rustfmt
+      # Rules are in rustfmt.toml; run `cargo fmt` before pushing.
+      - run: cargo fmt --check --manifest-path app/plugins/tauri-plugin-nowplaying/Cargo.toml
+      - run: cargo fmt --check --manifest-path app/src-tauri/Cargo.toml
 
   audit:
     name: Dependency audit (npm)
@@ -72,41 +48,3 @@ jobs:
       - name: App
         working-directory: app
         run: npm audit --omit=dev --audit-level=high
-
-  ai-review:
-    name: AI review (pull requests)
-    if: github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      pull-requests: write
-      id-token: write
-    steps:
-      - id: key
-        name: Check for ANTHROPIC_API_KEY
-        env:
-          KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: |
-          if [ -n "$KEY" ]; then echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else echo "::notice::ANTHROPIC_API_KEY is not set; skipping the AI review."; fi
-      - if: steps.key.outputs.enabled == 'true'
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-      - if: steps.key.outputs.enabled == 'true'
-        uses: anthropics/claude-code-action@v1
-        with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          prompt: |
-            REPO: ${{ github.repository }}
-            PR NUMBER: ${{ github.event.pull_request.number }}
-
-            Review this pull request for correctness bugs, security issues and
-            platform-specific breakage (macOS AppleScript, Windows SMTC, Android
-            Kotlin plugin, the Fastify server and the TypeScript UI). Skip style
-            nits: rustfmt, clippy and tsc already run in CI.
-
-            Use inline comments for specific lines, and one short summary comment
-            with `gh pr comment`. If you find nothing worth flagging, say so briefly.
-          claude_args: |
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"

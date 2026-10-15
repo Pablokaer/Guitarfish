@@ -1,0 +1,56 @@
+name: AI review
+
+# Advisory Claude review of pull requests: inline comments plus a summary. Runs
+# only when the ANTHROPIC_API_KEY secret is set, and never fails the PR.
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+concurrency:
+  group: ai-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    name: Claude review
+    if: ${{ !github.event.pull_request.head.repo.fork && !github.event.pull_request.draft }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    steps:
+      - id: key
+        name: Check for ANTHROPIC_API_KEY
+        env:
+          KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -n "$KEY" ]; then echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else echo "::notice::ANTHROPIC_API_KEY is not set; skipping the AI review."; fi
+      - if: steps.key.outputs.enabled == 'true'
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+      - if: steps.key.outputs.enabled == 'true'
+        # Advisory: an API outage or quota error must not block the PR.
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            Review this pull request for correctness bugs, security issues and
+            platform-specific breakage (macOS AppleScript, Windows SMTC, Android
+            Kotlin plugin, the Fastify server and the TypeScript UI). Skip style
+            nits: rustfmt, clippy and tsc already run in CI.
+
+            Use inline comments for specific lines, and one short summary comment
+            with `gh pr comment`. If you find nothing worth flagging, say so briefly.
+          claude_args: |
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"

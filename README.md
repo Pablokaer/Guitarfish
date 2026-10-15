@@ -255,13 +255,16 @@ The server requests the scopes `user-read-currently-playing` and `user-read-play
 - **CI** (`.github/workflows/ci.yml`) runs on every push and pull request:
   - server typecheck and tests;
   - app typecheck, tests and build;
-  - plugin tests on macOS and a compile check on Windows.
+  - plugin tests and `cargo clippy -D warnings` on macOS and Windows (each OS compiles different detector code).
 - **Code review** (`.github/workflows/code-review.yml`) also runs on every push and pull request:
-  - `cargo fmt --check` and `cargo clippy -D warnings` on macOS and Windows. Formatting rules are in `rustfmt.toml`; run `cargo fmt` before pushing.
+  - `cargo fmt --check`. The rules are in `rustfmt.toml`; run `cargo fmt` before pushing.
   - `npm audit` of the server's and the app's runtime dependencies. It fails on high or critical advisories.
-  - On pull requests, an AI review by [Claude Code](https://github.com/anthropics/claude-code-action) posts inline comments and a summary. It's advisory, not blocking, and only runs when the repository secret `ANTHROPIC_API_KEY` is set.
-- **Release** (`.github/workflows/release.yml`) first runs CI and Code review on the tagged commit, and stops if either fails. Then it builds the installable apps and attaches them to a GitHub release: a universal `.dmg` for macOS, `.msi` and `.exe` installers for Windows, and a universal `.apk` for Android.
-  1. Set the new version in `app/src-tauri/tauri.conf.json` (and `app/src-tauri/Cargo.toml`).
+- **AI review** (`.github/workflows/ai-review.yml`): on pull requests, [Claude Code](https://github.com/anthropics/claude-code-action) posts inline comments and a summary.
+  - It's advisory: it never fails the PR.
+  - It only runs when the repository secret `ANTHROPIC_API_KEY` is set.
+  - It's the only workflow with write access to pull requests.
+- **Release** (`.github/workflows/release.yml`) first runs CI and Code review on the tagged commit with read-only tokens, and stops if either fails. Then it builds the installable apps and attaches them to a GitHub release: a universal `.dmg` for macOS, `.msi` and `.exe` installers for Windows, and a universal `.apk` for Android.
+  1. Set the new version in `app/src-tauri/tauri.conf.json`, `app/src-tauri/Cargo.toml`, the plugin's `Cargo.toml` and both `package.json` files.
   2. Push a matching tag: `git tag v0.2.0 && git push origin v0.2.0`. Every build runs, and the release is published when all succeed.
 
   You can also run *Release* by hand from the Actions tab:

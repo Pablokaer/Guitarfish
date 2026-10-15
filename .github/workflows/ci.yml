@@ -9,9 +9,14 @@ on:
   workflow_dispatch:
   workflow_call:
 
+# github.workflow is the caller's name when release.yml calls this, so a release
+# never shares (and cancels) the group of the push-triggered run on the same ref.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   server:
@@ -50,7 +55,8 @@ jobs:
 
   rust:
     # macOS runs the AppleScript parser tests; Windows compiles the SMTC code.
-    name: Rust (${{ matrix.os }})
+    # Clippy also compiles both crates, so it replaces a separate `cargo check`.
+    name: Rust tests + clippy (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -64,6 +70,8 @@ jobs:
           cache: npm
           cache-dependency-path: app/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
@@ -77,5 +85,7 @@ jobs:
           npm run build
       - name: Plugin tests
         run: cargo test --manifest-path app/plugins/tauri-plugin-nowplaying/Cargo.toml
-      - name: App check
-        run: cargo check --manifest-path app/src-tauri/Cargo.toml
+      - name: Clippy
+        run: |
+          cargo clippy --manifest-path app/plugins/tauri-plugin-nowplaying/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path app/src-tauri/Cargo.toml --all-targets -- -D warnings

@@ -1,6 +1,6 @@
 name: Release
 
-# Runs the tests (ci.yml) and the code review (code-review.yml) first; nothing is
+# Runs the tests (ci.yml) and the code review checks (code-review.yml) first; nothing is
 # built or released unless both pass. Then builds installable apps and attaches
 # them to a GitHub release:
 #   - Windows: .msi and .exe (NSIS) installers
@@ -37,19 +37,18 @@ concurrency:
 
 jobs:
   # A release is only built when the tests and the code review pass on this commit.
+  # Read-only tokens: these jobs install and run third-party code.
   tests:
     name: Tests
     uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
 
   review:
     name: Code review
     uses: ./.github/workflows/code-review.yml
-    # The called workflow's AI job asks for these (it is skipped outside pull requests).
     permissions:
       contents: read
-      pull-requests: write
-      id-token: write
-    secrets: inherit
 
   prepare:
     name: Create draft release
