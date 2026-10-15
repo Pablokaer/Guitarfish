@@ -1,3 +1,5 @@
+mod songsterr;
+
 /// Layout commands offered in the native menu. Their accelerators also work while
 /// the embedded Songsterr page has keyboard focus, which DOM key handlers in the
 /// main webview never see. The id after `layout:` is sent to the UI as-is.
