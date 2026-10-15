@@ -16,14 +16,15 @@ import {
   type LayoutCommand,
   type LayoutState,
 } from "./layout";
-import { EntryStore, isSongPage, PickStore, pushHistory, toEntry, toggleFavorite, toResult, type TabEntry } from "./library";
-import { isConfidentMatch, songsterrQuery, songsterrSearchPage } from "./match";
+import { EntryStore, isSongPage, PickStore, pushHistory, toEntry, toggleFavorite, toResult, trackKey, type TabEntry } from "./library";
+import { cleanTitle, isConfidentMatch, songsterrQuery, songsterrSearchPage } from "./match";
 import { clampSpeed, clampTranspose, cursorSource, PracticeStore, SPEED_PRESETS } from "./practice";
 import { dropLegacyStorage, loadSettings, saveSettings } from "./settings";
 import { syncStatus, type SyncStatus } from "./status";
 import "./styles.css";
 import { searchSongsterr } from "./songsterr";
 import { pollIntervalFor, SyncController } from "./sync";
+import { ACCEPTED_EXTENSIONS, checkImport, MAX_TAB_BYTES, TOO_LARGE } from "./tabfile";
 import type { PlaybackCapabilities, Song, SongsterrResult, TabInfo, Track } from "./types";
 import { installUpdate, updateAction, updateNotice } from "./selfupdate";
 import { checkForUpdate, type UpdateInfo } from "./update";
@@ -107,6 +108,8 @@ const el = {
   wrong: $<HTMLButtonElement>("btn-wrong"),
   openSongsterr: $<HTMLButtonElement>("btn-open-songsterr"),
   fav2: $<HTMLButtonElement>("btn-fav-2"),
+  importTab: $<HTMLButtonElement>("btn-import"),
+  myTabs: $<HTMLButtonElement>("btn-my-tabs"),
   localCard: $("local-card"),
   tabSelect: $<HTMLSelectElement>("tab-select"),
   setFollow: $<HTMLInputElement>("set-follow"),
@@ -192,7 +195,7 @@ const sync = new SyncController({
 });
 
 // ---- State ---------------------------------------------------------------------
-type View = "tab" | "search" | "history" | "favorites";
+type View = "tab" | "search" | "history" | "favorites" | "catalogue" | "import";
 type Source = "songsterr" | "local";
 
 let layout: LayoutState = loadLayout();
@@ -355,6 +358,7 @@ function setView(v: View) {
   view = v;
   if (v === "history") renderEntryPage("history");
   if (v === "favorites") renderEntryPage("favorites");
+  if (v === "catalogue") void renderCataloguePage();
   renderStage();
 }
 
@@ -822,7 +826,7 @@ function catalogueRows(track: Track | null, songs: Song[]): HTMLElement {
   const list = document.createElement("ul");
   list.className = "rows";
   if (songs.length === 0) {
-    list.innerHTML = `<li class="empty-row">No songs found in the Guitarfish catalogue.</li>`;
+    list.innerHTML = `<li class="empty-row">No matching songs in your tabs.</li>`;
     return list;
   }
   for (const s of songs) {
@@ -830,7 +834,7 @@ function catalogueRows(track: Track | null, songs: Song[]): HTMLElement {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "row";
-    const meta = s.score != null ? `<span class="row-meta score">${Math.round(s.score * 100)}%</span>` : s.tabs.length === 0 ? `<span class="row-meta">no tabs yet</span>` : "";
+    const meta = s.score != null ? `<span class="row-meta score">${Math.round(s.score * 100)}%</span>` : "";
     b.innerHTML = `${icon("layers", 16)}<span class="row-main"><span class="row-title">${escapeHtml(s.title)}</span><span class="row-sub">${escapeHtml(s.artist)}</span></span>${meta}`;
     b.onclick = async () => {
       if (track) {
@@ -864,7 +868,12 @@ function showLocalMiss(track: Track, candidates: Song[]) {
   sw.textContent = "Show Songsterr instead";
   sw.hidden = !embed;
   sw.onclick = () => setSource("songsterr");
-  wrap.querySelector(".page-head")!.appendChild(sw);
+  const imp = document.createElement("button");
+  imp.className = "btn";
+  imp.type = "button";
+  imp.innerHTML = `${icon("upload", 14)}Import a tab for it…`;
+  imp.onclick = () => showImport(track);
+  wrap.querySelector(".page-head")!.append(imp, sw);
   wrap.insertAdjacentHTML("beforeend", `<div class="list-title">${candidates.length ? "Is it one of these?" : "No candidates"}</div>`);
   wrap.appendChild(catalogueRows(track, candidates));
   showPanel(wrap);
@@ -911,7 +920,7 @@ async function showSearch(query: string, correction: Track | null) {
     </form>
     ${correction ? `<div class="notice">Choosing the tab for <b>${escapeHtml(correction.title)}</b> by ${escapeHtml(correction.artist)}. Guitarfish will remember your choice for this song.</div>` : ""}
     <div class="list-title">Songsterr</div><div data-slot="songsterr"><ul class="rows"><li class="empty-row">Searching…</li></ul></div>
-    <div class="list-title">Guitarfish catalogue</div><div data-slot="local"><ul class="rows"><li class="empty-row">Searching…</li></ul></div>`;
+    <div class="list-title">My tabs</div><div data-slot="local"><ul class="rows"><li class="empty-row">Searching…</li></ul></div>`;
   el.page.replaceChildren(inner);
   const form = inner.querySelector("form")!;
   const input = form.querySelector("input")!;
@@ -945,7 +954,8 @@ async function showSearch(query: string, correction: Track | null) {
     },
     (e) => {
       if (seq !== searchSeq) return;
-      slotS.innerHTML = `<ul class="rows"><li class="empty-row">Search failed: ${escapeHtml(String(e))}</li></ul>`;
+      const why = e instanceof Error ? e.message : String(e);
+      slotS.innerHTML = `<ul class="rows"><li class="empty-row">Couldn't reach Songsterr. You may be offline. <small class="muted">${escapeHtml(why)}</small></li></ul>`;
     },
   );
   void catalogue()
@@ -959,6 +969,190 @@ async function showSearch(query: string, correction: Track | null) {
         if (seq === searchSeq) slotL.innerHTML = `<ul class="rows"><li class="empty-row">Couldn't read the local tab catalogue.</li></ul>`;
       },
     );
+}
+
+// ---- My tabs: import and manage the on-device catalogue ---------------------------
+/**
+ * The file picker's filter. Android's picker filters by MIME type, which these
+ * formats don't have, so it would grey every tab file out: there the importer
+ * checks the extension after the choice instead.
+ */
+const tabFileFilter = /android/i.test(navigator.userAgent) ? "" : ACCEPTED_EXTENSIONS.join(",");
+
+/** The import form. `forTrack`: the song playing now, used to prefill it and offered as the link. */
+function showImport(forTrack: Track | null) {
+  view = "import";
+  renderStage();
+  const inner = document.createElement("div");
+  inner.className = "page-inner";
+  inner.innerHTML = `
+    <div class="page-head"><h1>Import a tab</h1></div>
+    <form class="import-form" novalidate>
+      <label class="field">Tab file<input name="file" type="file"${tabFileFilter ? ` accept="${tabFileFilter}"` : ""} /></label>
+      <label class="field">Artist<input name="artist" type="text" autocomplete="off" /></label>
+      <label class="field">Title<input name="title" type="text" autocomplete="off" /></label>
+      ${forTrack ? `<label class="switch-row"><span>Use it for the song playing now<small>${escapeHtml(label(forTrack))}</small></span><input name="link" type="checkbox" class="switch" checked /></label>` : ""}
+      <p class="form-error" role="alert" hidden></p>
+      <div class="form-actions"><button class="btn primary" type="submit">Import</button><button class="btn" type="button" data-cancel>Cancel</button></div>
+    </form>
+    <p class="hint">Guitar Pro (.gp, .gp3–.gp7, .gpx), alphaTex (.alphatex, .atex) or MusicXML (.musicxml, .xml, .mxl), up to 20 MB.
+    The file is stored on this device only. Import only tabs you have the right to use.</p>`;
+  el.page.replaceChildren(inner);
+  const form = inner.querySelector("form")!;
+  const field = (name: string) => form.querySelector<HTMLInputElement>(`[name="${name}"]`)!;
+  const [file, artist, title] = [field("file"), field("artist"), field("title")];
+  const link = form.querySelector<HTMLInputElement>('[name="link"]');
+  const error = form.querySelector<HTMLElement>(".form-error")!;
+  const submit = form.querySelector<HTMLButtonElement>('[type="submit"]')!;
+  if (forTrack) {
+    artist.value = forTrack.artist;
+    title.value = cleanTitle(forTrack.title);
+  }
+  const fail = (msg: string) => {
+    error.textContent = msg;
+    error.hidden = false;
+  };
+  form.querySelector<HTMLButtonElement>("[data-cancel]")!.onclick = () => setView("catalogue");
+  form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    error.hidden = true;
+    const f = file.files?.[0];
+    if (!f) return fail("Choose a tab file.");
+    if (f.size > MAX_TAB_BYTES) return fail(TOO_LARGE);
+    submit.disabled = true;
+    try {
+      const data = await f.arrayBuffer();
+      const checked = checkImport({ fileName: f.name, data, title: title.value, artist: artist.value });
+      if (!checked.ok) return fail(checked.error);
+      const forNow = forTrack && link?.checked ? forTrack : null;
+      const c = await catalogue();
+      const { song } = await c.addTab({ ...checked.value, data, durationMs: forNow?.durationMs ?? null });
+      if (forNow) await c.confirm(forNow, song);
+      if (forNow && sync.current && trackKey(sync.current) === trackKey(forNow)) {
+        // Show it at once in the local viewer.
+        settings.songsterrPanel = false;
+        saveSettings(settings);
+        setView("tab");
+        await sync.refreshLocal();
+      } else {
+        view = "catalogue";
+        renderStage();
+        await renderCataloguePage(`Imported ${checked.value.name} for “${song.title}” by ${song.artist}.`);
+        if (sync.current) void sync.refreshLocal();
+      }
+    } catch (e) {
+      console.warn("import failed", e);
+      fail(`Couldn't save the tab on this device: ${String(e)}`);
+    } finally {
+      submit.disabled = false;
+    }
+  };
+  file.focus();
+}
+
+/** The My tabs page: every imported song and tab file, with delete. */
+async function renderCataloguePage(message?: string) {
+  const inner = document.createElement("div");
+  inner.className = "page-inner";
+  inner.innerHTML = `<div class="page-head"><h1>My tabs</h1></div>${message ? `<div class="notice">${escapeHtml(message)}</div>` : ""}`;
+  const add = document.createElement("button");
+  add.className = "btn primary";
+  add.type = "button";
+  add.innerHTML = `${icon("upload", 14)}Import tab…`;
+  add.onclick = () => showImport(sync.current);
+  inner.querySelector(".page-head")!.appendChild(add);
+  const list = document.createElement("ul");
+  list.className = "rows";
+  inner.appendChild(list);
+  let songs: Song[];
+  try {
+    songs = await (await catalogue()).songs();
+  } catch (e) {
+    console.warn("catalogue unavailable", e);
+    songs = [];
+    list.innerHTML = `<li class="empty-row">Couldn't read the local tab catalogue.</li>`;
+  }
+  if (view !== "catalogue") return; // the user moved on meanwhile
+  if (!songs.length && !list.childElementCount) {
+    list.innerHTML = `<li class="empty-row">No tabs yet. Import Guitar Pro, alphaTex or MusicXML files to see them in the local viewer, following Spotify.</li>`;
+  }
+  for (const s of songs) list.appendChild(catalogueSongRow(s));
+  el.page.replaceChildren(inner);
+}
+
+function catalogueSongRow(s: Song): HTMLElement {
+  const li = document.createElement("li");
+  li.className = "song-group";
+  const open = document.createElement("button");
+  open.type = "button";
+  open.className = "row";
+  open.innerHTML = `${icon("layers", 16)}<span class="row-main"><span class="row-title">${escapeHtml(s.title)}</span><span class="row-sub">${escapeHtml(s.artist)}</span></span><span class="row-meta">${s.tabs.length} ${s.tabs.length === 1 ? "tab" : "tabs"}</span>`;
+  open.onclick = async () => {
+    settings.songsterrPanel = false;
+    saveSettings(settings);
+    setView("tab");
+    await openSong(s, "opened from My tabs");
+  };
+  const files = document.createElement("ul");
+  files.className = "tab-files";
+  for (const t of s.tabs) {
+    const f = document.createElement("li");
+    f.innerHTML = `<span class="tab-file-name">${escapeHtml(t.name)}</span><span class="row-meta">${t.format === "gp" ? "Guitar Pro" : t.format === "alphatex" ? "alphaTex" : "MusicXML"}</span>`;
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "btn small";
+    del.innerHTML = `${icon("trash", 13)}<span>Delete</span>`;
+    del.setAttribute("aria-label", `Delete ${t.name}`);
+    let armed = false;
+    del.onclick = async () => {
+      if (!armed) {
+        // Two steps, so a stray click can't delete a file.
+        armed = true;
+        del.classList.add("danger");
+        del.querySelector("span")!.textContent = "Confirm delete";
+        setTimeout(() => {
+          armed = false;
+          del.classList.remove("danger");
+          del.querySelector("span")!.textContent = "Delete";
+        }, 4000);
+        return;
+      }
+      del.disabled = true;
+      try {
+        await (await catalogue()).deleteTab(t.id);
+        await afterTabDeleted(s.id);
+        await renderCataloguePage(`Deleted ${t.name}.`);
+      } catch (e) {
+        console.warn("delete failed", e);
+        del.disabled = false;
+        showBanner(`Couldn't delete ${escapeHtml(t.name)}: ${escapeHtml(String(e))}`, "warn");
+      }
+    };
+    f.appendChild(del);
+    files.appendChild(f);
+  }
+  li.append(open, files);
+  return li;
+}
+
+/** A tab of `songId` was deleted: update the local viewer if it shows that song. */
+async function afterTabDeleted(songId: number) {
+  if (currentSong?.id !== songId) return;
+  const song = await (await catalogue()).song(songId);
+  if (song) {
+    currentSong = song;
+    const keep = song.tabs.findIndex((t) => t.id === currentTabId);
+    fillTabSelect(song.tabs, Math.max(0, keep));
+    if (keep < 0) await openTab(song.tabs[0]);
+    return;
+  }
+  currentSong = null;
+  currentTabId = null;
+  viewer.clear();
+  el.tabSelect.hidden = true;
+  renderStage();
+  renderMatchInfo();
+  if (sync.current) void sync.refreshLocal();
 }
 
 function renderEntryPage(kind: "history" | "favorites") {
@@ -1078,6 +1272,8 @@ function bindTools() {
     if (url) void openExternal(url);
   };
   el.fav2.onclick = toggleFavoriteShown;
+  el.importTab.onclick = () => showImport(sync.current);
+  el.myTabs.onclick = () => setView("catalogue");
   el.toolsClose.onclick = () => dispatch("tools");
   // Each switch issues the command that flips it; renderLayout re-syncs all of them.
   const layoutSwitches: [HTMLInputElement, LayoutCommand][] = [

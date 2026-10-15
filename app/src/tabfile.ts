@@ -20,6 +20,7 @@ const EXTENSIONS: Record<string, TabFormat> = {
 export const ACCEPTED_EXTENSIONS: readonly string[] = Object.keys(EXTENSIONS);
 export const MAX_TAB_BYTES = 20 * 1024 * 1024;
 export const MAX_NAME_CHARS = 200;
+export const TOO_LARGE = "The file is too large (20 MB at most).";
 /** How much of a text file is read to recognise it. */
 const SNIFF_BYTES = 64 * 1024;
 
@@ -100,7 +101,7 @@ export function checkImport(input: ImportInput): ImportCheck {
     };
   }
   if (input.data.byteLength === 0) return { ok: false, error: "The file is empty." };
-  if (input.data.byteLength > MAX_TAB_BYTES) return { ok: false, error: "The file is too large (20 MB at most)." };
+  if (input.data.byteLength > MAX_TAB_BYTES) return { ok: false, error: TOO_LARGE };
   const bad = contentError(format, name, new Uint8Array(input.data));
   if (bad) return { ok: false, error: bad };
 
