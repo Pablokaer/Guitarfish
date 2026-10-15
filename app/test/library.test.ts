@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { EntryStore, isSongPage, PickStore, pushHistory, toEntry, toggleFavorite, type TabEntry } from "../src/library";
+import { EntryStore, isSongPage, PickStore, pushHistory, toEntry, toggleFavorite, trackKey, type TabEntry } from "../src/library";
+import type { Track } from "../src/types";
 
 const e = (songId: number, at = songId): TabEntry => ({ url: `https://www.songsterr.com/a/wa/song?id=${songId}`, songId, title: `T${songId}`, artist: "A", at });
 
@@ -60,5 +61,18 @@ describe("picks", () => {
     expect(p.get("sp:abc")).toEqual(r);
     p.set("sp:abc", null);
     expect(new PickStore("p", storage).get("sp:abc")).toBeNull();
+  });
+});
+
+describe("trackKey", () => {
+  const track = (extra: Partial<Track> = {}): Track => ({ title: "Uprising", artist: "Muse", isPlaying: true, source: "os", player: "Spotify", ...extra });
+
+  it("uses the Spotify ID when known", () => {
+    expect(trackKey(track({ spotifyId: "abc" }))).toBe("sp:abc");
+  });
+
+  it("otherwise uses artist and title, case- and space-insensitive", () => {
+    expect(trackKey(track({ artist: " MUSE ", title: "Uprising  " }))).toBe("at:muse|uprising");
+    expect(trackKey(track({ spotifyId: null }))).toBe(trackKey(track({ artist: "muse", title: "UPRISING" })));
   });
 });
