@@ -283,6 +283,12 @@ kbd { display: inline-block; min-width: 18px; padding: 1px 5px; border-radius: 4
 #tab { background: var(--sheet); min-height: 100%; }
 #tab:empty { display: none; }
 .local-panel { padding: 24px; }
+/* alphaTab's own cursor and selection: shown for the built-in player only. */
+#tab .at-cursor-bar { background: var(--accent-soft); }
+#tab .at-cursor-beat { background: var(--accent); width: 3px; }
+#tab .at-selection div { background: rgb(30 215 96 / 0.18); }
+#tab .at-highlight * { fill: var(--accent); stroke: var(--accent); }
+#tab[data-player="stopped"] .at-cursor-bar, #tab[data-player="stopped"] .at-cursor-beat { visibility: hidden; }
 .bar-highlight { position: absolute; pointer-events: none; z-index: 5; background: #1ed76026; outline: 2px solid #1ed76099; border-radius: 4px; transition: all .15s ease-out; }
 .page { overflow-y: auto; background: var(--bg); }
 
@@ -348,6 +354,14 @@ kbd { display: inline-block; min-width: 18px; padding: 1px 5px; border-radius: 4
 .match { display: grid; gap: 2px; font-size: 12.5px; min-width: 0; }
 .match .m-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .match .m-sub { color: var(--muted); font-size: 11.5px; }
+/* Local tab → Practice */
+.card-sub { margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }
+.kv > .tuning { white-space: normal; font-variant-numeric: tabular-nums; }
+.tuning small { display: block; color: var(--muted); font-size: 11px; }
+.practice-row { display: flex; gap: 6px; }
+.practice-row .btn { flex: 1; }
+.practice-transport { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+#pr-speed-presets { align-self: start; }
 .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .btn-grid .btn { padding: 0 8px; }
 .shortcuts { display: grid; grid-template-columns: 1fr auto; gap: 6px 8px; margin: 0; font-size: 12px; }

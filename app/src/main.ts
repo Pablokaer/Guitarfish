@@ -19,13 +19,14 @@ import {
 import { EntryStore, isSongPage, PickStore, toEntry, toResult, type TabEntry } from "./library";
 import { LibrarySync, syncHint } from "./librarysync";
 import { isConfidentMatch, songsterrQuery, songsterrSearchPage } from "./match";
+import { clampSpeed, clampTranspose, cursorSource, PracticeStore, SPEED_PRESETS } from "./practice";
 import { loadSettings, saveSettings } from "./settings";
 import { syncStatus, type SyncStatus } from "./status";
 import "./styles.css";
 import { pollIntervalFor, SyncController } from "./sync";
 import type { PlaybackCapabilities, Song, SongsterrResult, TabInfo, Track } from "./types";
 import { checkForUpdate, type UpdateInfo } from "./update";
-import { TabViewer } from "./viewer";
+import { TabViewer, type PlayerStatus } from "./viewer";
 
 /** How often a running app looks for a new release (also checked at startup). */
 const UPDATE_CHECK_MS = 6 * 60 * 60 * 1000;
@@ -115,6 +116,20 @@ const el = {
   setOffsetOut: $<HTMLOutputElement>("set-offset-out"),
   setZoom: $<HTMLInputElement>("set-zoom"),
   setZoomOut: $<HTMLOutputElement>("set-zoom-out"),
+  prTuning: $("pr-tuning"),
+  prTranspose: $<HTMLInputElement>("pr-transpose"),
+  prTransposeOut: $<HTMLOutputElement>("pr-transpose-out"),
+  prTransposeDown: $<HTMLButtonElement>("pr-transpose-down"),
+  prTransposeUp: $<HTMLButtonElement>("pr-transpose-up"),
+  prTransposeReset: $<HTMLButtonElement>("pr-transpose-reset"),
+  prPlay: $<HTMLButtonElement>("pr-play"),
+  prStop: $<HTMLButtonElement>("pr-stop"),
+  prState: $("pr-state"),
+  prSpeed: $<HTMLInputElement>("pr-speed"),
+  prSpeedOut: $<HTMLOutputElement>("pr-speed-out"),
+  prSpeedPresets: $("pr-speed-presets"),
+  prLoop: $<HTMLInputElement>("pr-loop"),
+  prClearSelection: $<HTMLButtonElement>("pr-clear-selection"),
   setTheme: $<HTMLSelectElement>("set-theme"),
   layPlayer: $<HTMLInputElement>("lay-player"),
   layPlayerExpanded: $<HTMLInputElement>("lay-player-expanded"),
@@ -154,6 +169,7 @@ const library = new LibrarySync({
   onChange: () => renderLibrary(),
   onStatus: (s) => (el.librarySyncHint.textContent = syncHint(s)),
 });
+const practice = new PracticeStore();
 /** Detector polling and the tab lookup for each new track; the UI below renders it. */
 const sync = new SyncController({
   detector,
@@ -164,6 +180,7 @@ const sync = new SyncController({
     nowPlaying: () => renderNowPlaying(),
     trackChanged: () => {
       currentSong = null;
+      viewer.stop();
       localHow = "";
       viewer.hideHighlight();
       el.tabSelect.hidden = true;
@@ -338,6 +355,7 @@ function renderStage() {
   el.sourceSwitch.hidden = !(embed && currentSong);
   el.sourceSwitch.querySelectorAll<HTMLButtonElement>("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.source === src)));
   el.localCard.hidden = src !== "local" || !currentSong;
+  if (el.localCard.hidden) viewer.stop();
   renderToolbar();
 }
 
@@ -608,7 +626,8 @@ function tick() {
     el.dur.textContent = fmt(dur);
     el.progressFill.style.width = `${pct}%`;
     el.progress.setAttribute("aria-valuenow", String(Math.round(pct)));
-    if (settings.follow && currentSong && sync.current.isPlaying && source() === "local") {
+    const cursor = cursorSource({ player: viewer.player.state, spotifyPlaying: sync.current.isPlaying, follow: settings.follow });
+    if (cursor === "spotify" && currentSong && source() === "local") {
       viewer.follow(pos + settings.followOffsetSec * 1000);
     }
   } else {
@@ -693,11 +712,101 @@ function fillTabSelect(tabs: TabInfo[], selected: number) {
 
 async function openTab(tab: TabInfo) {
   const { format, data } = await api.tab(tab);
+  currentTabId = tab.id;
+  const p = practice.get(tab.id);
+  viewer.setTranspose(p.transpose);
+  viewer.setSpeed(p.speed);
+  renderPractice();
   viewer.load(format, data);
+}
+
+// ---- Local tab practice (transpose, tuning, built-in player) ----------------------
+/** The local tab shown in the viewer; practice settings are kept per tab. */
+let currentTabId: number | null = null;
+
+function renderPractice() {
+  const p = currentTabId != null ? practice.get(currentTabId) : { transpose: 0, speed: 1 };
+  el.prTranspose.value = String(p.transpose);
+  el.prTransposeOut.textContent = p.transpose > 0 ? `+${p.transpose}` : String(p.transpose);
+  el.prTransposeReset.disabled = p.transpose === 0;
+  el.prSpeed.value = String(p.speed);
+  el.prSpeedOut.textContent = `${Math.round(p.speed * 100)}%`;
+  el.prSpeedPresets.querySelectorAll<HTMLButtonElement>("button").forEach((b) => b.setAttribute("aria-pressed", String(Number(b.dataset.speed) === p.speed)));
+  [el.prTranspose, el.prSpeed].forEach(setFill);
+}
+
+function renderTuning() {
+  const t = viewer.tuning();
+  if (!t) {
+    el.prTuning.textContent = "—";
+    return;
+  }
+  const label = [t.name, t.capo ? `capo ${t.capo}` : ""].filter(Boolean).join(" · ");
+  el.prTuning.innerHTML = `${escapeHtml(t.notes)}${label ? `<small>${escapeHtml(label)}</small>` : ""}`;
+}
+
+function renderPlayer(s: PlayerStatus) {
+  const playing = s.state === "playing";
+  el.prPlay.innerHTML = icon(playing ? "pause" : "play", 16);
+  el.prPlay.title = playing ? "Pause" : "Play the tab";
+  el.prPlay.setAttribute("aria-label", el.prPlay.title);
+  el.prStop.disabled = s.state === "stopped" && !s.loading;
+  el.prState.textContent = s.loading ? "Loading sounds…" : playing ? "Playing · cursor follows the tab" : s.state === "paused" ? "Paused" : "Built-in player";
+  el.prClearSelection.hidden = !viewer.hasSelection;
+}
+
+function setPractice(patch: { transpose?: number; speed?: number }) {
+  if (currentTabId == null) return;
+  const before = practice.get(currentTabId);
+  const p = practice.set(currentTabId, patch);
+  if (p.transpose !== before.transpose) viewer.setTranspose(p.transpose);
+  if (p.speed !== before.speed) viewer.setSpeed(p.speed);
+  renderPractice();
+}
+
+function bindPractice() {
+  el.prSpeedPresets.replaceChildren(
+    ...SPEED_PRESETS.map((v) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.dataset.speed = String(v);
+      b.textContent = `${Math.round(v * 100)}%`;
+      b.onclick = () => setPractice({ speed: v });
+      return b;
+    }),
+  );
+  el.prTranspose.oninput = () => {
+    el.prTransposeOut.textContent = el.prTranspose.value;
+    setFill(el.prTranspose);
+  };
+  el.prTranspose.onchange = () => setPractice({ transpose: clampTranspose(el.prTranspose.value) });
+  el.prTransposeDown.onclick = () => setPractice({ transpose: Number(el.prTranspose.value) - 1 });
+  el.prTransposeUp.onclick = () => setPractice({ transpose: Number(el.prTranspose.value) + 1 });
+  el.prTransposeReset.onclick = () => setPractice({ transpose: 0 });
+  el.prSpeed.oninput = () => {
+    el.prSpeedOut.textContent = `${Math.round(Number(el.prSpeed.value) * 100)}%`;
+    setFill(el.prSpeed);
+  };
+  el.prSpeed.onchange = () => setPractice({ speed: clampSpeed(el.prSpeed.value) });
+  el.prPlay.onclick = () => viewer.playPause();
+  el.prStop.onclick = () => viewer.stop();
+  el.prLoop.onchange = () => viewer.setLooping(el.prLoop.checked);
+  el.prClearSelection.onclick = () => {
+    viewer.clearSelection();
+    el.prClearSelection.hidden = true;
+  };
+  // Dragging across bars selects them (alphaTab); offer to clear the selection.
+  el.tab.addEventListener("pointerup", () => setTimeout(() => (el.prClearSelection.hidden = !viewer.hasSelection), 0));
+  viewer.onPlayer = renderPlayer;
+  viewer.onScore = renderTuning;
+  renderPlayer(viewer.player);
+  renderPractice();
 }
 
 async function openSong(song: Song, how: string) {
   currentSong = song;
+  currentTabId = null;
+  renderPractice();
   localHow = how === "picked" ? "your pick" : how;
   showPanel(null);
   renderStage();
@@ -1170,6 +1279,7 @@ async function main() {
   localizeShortcuts();
   bindPlayer();
   bindTools();
+  bindPractice();
   bindChrome();
   renderLayout();
   renderAll();

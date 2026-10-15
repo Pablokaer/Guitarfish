@@ -7,6 +7,7 @@ const PATHS = {
   starFilled: '<path fill="currentColor" d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9z"/>',
   play: '<path fill="currentColor" stroke="none" d="M8 5.5v13a1 1 0 0 0 1.5.9l10.4-6.5a1 1 0 0 0 0-1.8L9.5 4.6A1 1 0 0 0 8 5.5z"/>',
   pause: '<rect fill="currentColor" stroke="none" x="6" y="5" width="4.2" height="14" rx="1.2"/><rect fill="currentColor" stroke="none" x="13.8" y="5" width="4.2" height="14" rx="1.2"/>',
+  stop: '<rect fill="currentColor" stroke="none" x="6" y="6" width="12" height="12" rx="1.6"/>',
   prev: '<path fill="currentColor" stroke="none" d="M18 6.2v11.6a.8.8 0 0 1-1.2.7L9 13.2v4.3a.5.5 0 0 1-.5.5h-2a.5.5 0 0 1-.5-.5v-11a.5.5 0 0 1 .5-.5h2a.5.5 0 0 1 .5.5v4.3l7.8-5.3a.8.8 0 0 1 1.2.7z"/>',
   next: '<path fill="currentColor" stroke="none" d="M6 6.2v11.6a.8.8 0 0 0 1.2.7l7.8-5.3v4.3a.5.5 0 0 0 .5.5h2a.5.5 0 0 0 .5-.5v-11a.5.5 0 0 0-.5-.5h-2a.5.5 0 0 0-.5.5v4.3L7.2 5.5a.8.8 0 0 0-1.2.7z"/>',
   volume: '<path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/>',
