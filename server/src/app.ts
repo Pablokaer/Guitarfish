@@ -6,11 +6,13 @@ import {
   insertSong,
   insertTab,
   linkExternalId,
+  syncLibrary,
   tabsForSong,
   type Db,
   type SongRow,
   type TabFormat,
 } from "./db.js";
+import { parseSyncRequest } from "./library.js";
 import { lookup, search } from "./matching.js";
 import { searchSongsterr } from "./songsterr.js";
 import * as spotify from "./spotify.js";
@@ -21,6 +23,8 @@ export interface AppOptions {
   logger?: boolean;
   /** Injected in tests so they don't hit songsterr.com. */
   songsterrFetch?: typeof fetch;
+  /** Server clock (epoch ms); injected in tests. */
+  now?: () => number;
 }
 
 /** Public shape of a song, with its available tabs. */
@@ -43,6 +47,9 @@ function songDto(db: Db, s: SongRow) {
 }
 
 const FORMATS: TabFormat[] = ["alphatex", "gp", "musicxml"];
+
+const escapeHtml = (s: string) =>
+  s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
 export function buildApp(opts: AppOptions): FastifyInstance {
   const { db } = opts;
@@ -158,6 +165,17 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     }
   });
 
+  // ---- Library: history and favorites synced across devices --------------
+  app.get("/v1/library", async () => syncLibrary(db, {}));
+
+  // Push local changes (entries, and { songId, deletedAt } removals). The reply is
+  // the merged lists, which the device adopts as its own.
+  app.post("/v1/library/sync", { bodyLimit: 2 * 1024 * 1024 }, async (req, reply) => {
+    const parsed = parseSyncRequest(req.body, (opts.now ?? Date.now)());
+    if (!parsed.ok) return reply.code(400).send({ error: parsed.error });
+    return syncLibrary(db, parsed.value);
+  });
+
   // ---- Spotify fallback ---------------------------------------------------
   app.get("/auth/spotify/login", async (_req, reply) => {
     if (!opts.spotify.clientId) {
@@ -174,9 +192,15 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     async (req, reply) => {
       const { code, state, error } = req.query;
       if (error || !code || !state) {
-        return reply.code(400).type("text/html").send(`<h3>Spotify login failed: ${error ?? "missing code"}</h3>`);
+        const reason = escapeHtml(error ?? "missing code");
+        return reply.code(400).type("text/html").send(`<h3>Spotify login failed: ${reason}</h3>`);
       }
-      await spotify.handleCallback(db, opts.spotify, code, state);
+      try {
+        await spotify.handleCallback(db, opts.spotify, code, state);
+      } catch (e) {
+        if (!(e instanceof spotify.LoginStateError)) throw e;
+        return reply.code(400).type("text/html").send(`<h3>Spotify login failed.</h3><p>${escapeHtml(e.message)}</p>`);
+      }
       return reply
         .type("text/html")
         .send("<h3>Spotify connected.</h3><p>You can close this tab and return to Guitarfish.</p>");

@@ -92,7 +92,7 @@ The app and the server are separate programs. The server can run on the same com
 
 - `index.ts` reads `PORT` (default `8787`), `HOST` (default `0.0.0.0`), `DB_FILE`, `SPOTIFY_CLIENT_ID` and `SPOTIFY_REDIRECT_URI`, opens the database and starts Fastify.
 - `app.ts` defines the routes. CORS is open because the Tauri webview has its own origin. Raw request bodies are accepted for uploading tab files, including binary Guitar Pro files.
-- `db.ts` creates four tables:
+- `db.ts` creates five tables (with `CREATE TABLE IF NOT EXISTS`, so an existing database gains new tables on the next start):
 
   | Table | Contents |
   |---|---|
@@ -100,9 +100,11 @@ The app and the server are separate programs. The server can run on the same com
   | `song_external_ids` | Spotify track ID → song, filled when a user confirms a match |
   | `tabs` | file content as a BLOB, format (`alphatex`, `gp`, `musicxml`), instrument, tuning, rating, placeholder flag |
   | `settings` | key/value store, used for the Spotify tokens |
+  | `library_entries` | history and favorites shared by all devices: one row per list and Songsterr song, either an entry (`at`) or a removal tombstone (`deleted_at`) |
 
 - `normalize.ts` and `matching.ts` do the song lookup (see below).
 - `songsterr.ts` calls Songsterr's public search and returns links only. No tab content is copied.
+- `library.ts` merges history and favorites pushed by devices: for each song the newest timestamp wins, and a removal beats an add with the same timestamp. History keeps the 50 most recent entries; favorites are not capped. Removals are kept (the 500 most recent per list) so a device that was offline can't bring a removed favorite back.
 - `spotify.ts` runs the OAuth PKCE flow, refreshes tokens and reads `me/player/currently-playing`.
 
 ## How it works, end to end
@@ -206,6 +208,8 @@ Environment variables: `PORT` (8787), `HOST` (0.0.0.0), `DB_FILE` (`server/data/
 | POST | `/v1/songs/:id/tabs?format=gp\|alphatex\|musicxml` | Upload a tab (raw body) |
 | POST | `/v1/songs/:id/external-ids` | Confirm a match `{ provider: "spotify", externalId }` |
 | GET | `/v1/songsterr/search?q=` | Songsterr search results (links only) |
+| GET | `/v1/library` | Synced history and favorites → `{ history: TabEntry[], favorites: TabEntry[] }`, newest first |
+| POST | `/v1/library/sync` | Push changes `{ history?, favorites? }`, each a list of entries `{ url, songId, title, artist, at }` or removals `{ songId, deletedAt }` (at most 500 per list); returns the merged lists |
 | GET | `/auth/spotify/login` · `/auth/spotify/callback` · `/auth/spotify/status` | Spotify fallback: sign-in and status |
 | POST | `/auth/spotify/logout` | Forget the stored Spotify tokens |
 | GET | `/v1/spotify/now-playing` | Current track from the Spotify Web API |
