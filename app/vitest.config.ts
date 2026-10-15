@@ -2,6 +2,8 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
+    // e2e/ holds the Playwright specs (npm run e2e).
+    include: ["test/**/*.test.ts"],
     coverage: {
       provider: "v8",
       include: ["src/**/*.ts"],

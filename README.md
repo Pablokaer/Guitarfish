@@ -41,6 +41,7 @@ Guitarfish runs alongside Spotify. When the song changes, it detects the new tra
 | Database | SQLite via `better-sqlite3` (WAL mode) | Songs, tabs (stored as BLOBs), confirmed Spotify IDs, Spotify tokens. File at `server/data/tabsync.db`. |
 | External services | Spotify Web API (OAuth Authorization Code + PKCE), Songsterr public search | Optional now-playing fallback; finding Songsterr pages. |
 | Tests | [Vitest](https://vitest.dev) (server + app), `cargo test` (plugin) | Unit tests for matching, normalization, API routes, layout, settings, library and status logic. |
+| E2E tests | [Playwright](https://playwright.dev) (Chromium) | Drives the built UI in a browser against a faked server and Spotify: song changes, local tabs, search, history, favorites, layout, settings, server outages. |
 | CI / CD | GitHub Actions, `tauri-apps/tauri-action` | Typecheck + tests on every push; release builds of `.dmg`, `.msi`/`.exe`, `.AppImage`/`.deb` and `.apk`. |
 
 ## Architecture
@@ -155,6 +156,7 @@ guitarfish/
 ├── app/                            Tauri 2 app (desktop + Android)
 │   ├── index.html, src/            UI (TypeScript + Vite), see "The app" above
 │   ├── test/                       vitest tests for the pure UI modules
+│   ├── e2e/                        Playwright end-to-end tests (fake server in fixtures.ts)
 │   ├── public/logo.png             logo (favicon and sidebar brand mark)
 │   ├── src-tauri/                  Rust shell, tauri.conf.json, capabilities, icons
 │   └── plugins/tauri-plugin-nowplaying/
@@ -289,9 +291,11 @@ The server requests the scopes `user-read-currently-playing` and `user-read-play
 ## 6. Tests, CI and releases
 
 - **Tests:** `npm test` in `server/` and in `app/` runs Vitest. `cargo test` in `app/plugins/tauri-plugin-nowplaying` covers the macOS output parser and control commands, and the MPRIS metadata mapping and control calls (those run on every OS).
+- **E2E tests:** `app/e2e/` holds Playwright tests of the UI running in a plain browser (Chromium), where the app uses the Spotify Web API fallback and the local catalogue view. Each test fakes the Guitarfish server and Spotify with `page.route` (`e2e/fixtures.ts`), so no server, Spotify account or network is needed. Run them with `npx playwright install chromium` once, then `npm run build && npm run e2e` in `app/` (they serve `dist/` with `vite preview` on port 4317, or `E2E_PORT`).
 - **CI** (`.github/workflows/ci.yml`) runs on every push and pull request:
   - server typecheck and tests;
   - app typecheck, tests and build;
+  - app E2E tests in Chromium; on failure the Playwright report is uploaded as a run artifact;
   - plugin tests and `cargo clippy -D warnings` on macOS, Windows and Linux (each OS compiles different detector code);
   - `cargo clippy` for the Android target, so the `#[cfg(mobile)]` code is checked before a release.
 - **Code review** (`.github/workflows/code-review.yml`) also runs on every push and pull request:
