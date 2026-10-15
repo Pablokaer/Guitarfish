@@ -8,9 +8,10 @@ Guitarfish runs alongside Spotify. When the song changes, it detects the new tra
 |---|---|---|
 | macOS | AppleScript query to the Spotify app (`osascript`) | ✅ |
 | Windows | Windows media controls API (SMTC), the API behind the media overlay | ✅ |
+| Linux | MPRIS over D-Bus, the interface the Spotify desktop app publishes | ✅ |
 | Android | `MediaSessionManager`, after the user grants Notification access | ✅ |
 | Any platform (fallback) | Spotify Web API, called through the server | ✅ optional |
-| Linux / iOS | — (Linux uses only the Web API fallback; iOS can't read other apps' playback) | ❌ |
+| iOS | — (iOS can't read other apps' playback) | ❌ |
 
 ## Contents
 
@@ -19,7 +20,7 @@ Guitarfish runs alongside Spotify. When the song changes, it detects the new tra
 - [How it works, end to end](#how-it-works-end-to-end)
 - [Repository layout](#repository-layout)
 - [1. Run the server](#1-run-the-server)
-- [2. Desktop app (macOS, Windows)](#2-desktop-app-macos-windows)
+- [2. Desktop app (macOS, Windows, Linux)](#2-desktop-app-macos-windows-linux)
 - [3. Android app](#3-android-app)
 - [4. Spotify Web API fallback (optional)](#4-spotify-web-api-fallback-optional)
 - [5. Songsterr](#5-songsterr)
@@ -30,17 +31,17 @@ Guitarfish runs alongside Spotify. When the song changes, it detects the new tra
 
 | Layer | Technology | Role |
 |---|---|---|
-| App shell | [Tauri 2](https://v2.tauri.app) (Rust) | Native window, menus, IPC between the UI and native code, installers for macOS / Windows / Android. The `unstable` feature enables the child webviews used for Songsterr. |
+| App shell | [Tauri 2](https://v2.tauri.app) (Rust) | Native window, menus, IPC between the UI and native code, installers for macOS / Windows / Linux / Android. The `unstable` feature enables the child webviews used for Songsterr. |
 | App UI | TypeScript + [Vite 7](https://vite.dev), no UI framework | Plain DOM code: detector loop, layout, sidebars, Spotify player, settings. |
 | Tab rendering | [alphaTab](https://alphatab.net) (`@coderline/alphatab` + its Vite plugin) | Renders alphaTex, Guitar Pro 3–7 and MusicXML; Guitarfish adds bar-follow on top. |
-| Song detection | Custom Tauri plugin `tauri-plugin-nowplaying` | Rust on desktop (AppleScript on macOS, the `windows` crate's WinRT SMTC bindings on Windows), Kotlin on Android. |
+| Song detection | Custom Tauri plugin `tauri-plugin-nowplaying` | Rust on desktop (AppleScript and an `objc2` notification observer on macOS, the `windows` crate's WinRT SMTC bindings on Windows, `zbus` MPRIS on Linux), Kotlin on Android. |
 | External links | `@tauri-apps/plugin-opener` | Opens pages in the system browser (Songsterr on Android, fallbacks). |
 | Notifications | `@tauri-apps/plugin-notification` | System notification when a new release is out. |
 | Server | Node 20+, TypeScript run by `tsx`, [Fastify 5](https://fastify.dev) + `@fastify/cors` | HTTP API: song matching, tab storage, Songsterr search proxy, Spotify OAuth. |
 | Database | SQLite via `better-sqlite3` (WAL mode) | Songs, tabs (stored as BLOBs), confirmed Spotify IDs, Spotify tokens. File at `server/data/tabsync.db`. |
 | External services | Spotify Web API (OAuth Authorization Code + PKCE), Songsterr public search | Optional now-playing fallback; finding Songsterr pages. |
 | Tests | [Vitest](https://vitest.dev) (server + app), `cargo test` (plugin) | Unit tests for matching, normalization, API routes, layout, settings, library and status logic. |
-| CI / CD | GitHub Actions, `tauri-apps/tauri-action` | Typecheck + tests on every push; release builds of `.dmg`, `.msi`/`.exe` and `.apk`. |
+| CI / CD | GitHub Actions, `tauri-apps/tauri-action` | Typecheck + tests on every push; release builds of `.dmg`, `.msi`/`.exe`, `.AppImage`/`.deb` and `.apk`. |
 
 ## Architecture
 
@@ -52,6 +53,7 @@ Guitarfish runs alongside Spotify. When the song changes, it detects the new tra
 │  │ main.ts    poll loop, UI  │ ───────────▶ │ tauri-plugin-nowplaying  │ │
 │  │ detector.ts device+fallback│ ◀─────────── │  macOS:   osascript      │ │
 │  │ api.ts     server client  │   Track JSON │  Windows: SMTC (WinRT)   │ │
+│  │                           │              │  Linux:   MPRIS (D-Bus)  │ │
 │  │ match.ts   Songsterr match│              │  Android: Kotlin plugin ─┼─┼─▶ MediaSessionManager
 │  │ viewer.ts  alphaTab       │              └──────────────────────────┘ │
 │  │ embed.ts   Songsterr view ├──▶ native child webview (songsterr.com)    │
@@ -72,10 +74,11 @@ The app and the server are separate programs. The server can run on the same com
 - **Rust shell** (`app/src-tauri/src/lib.rs`) registers the two plugins (`opener`, `nowplaying`). On macOS it also adds a *Layout* menu. The menu's keyboard shortcuts keep working while the Songsterr page has focus; the shell forwards each one to the UI as a `layout-command` event.
 - **Now-playing plugin** (`app/plugins/tauri-plugin-nowplaying`) has the same commands on every platform:
   - `get_now_playing` returns `{ track }`, a `Track` with title, artist, album, duration, position, play state, Spotify ID, volume, artwork URL and player name.
-  - `control` handles play/pause, next, previous, seek and volume on desktop.
-  - `get_capabilities` tells the UI which of those controls work on this platform.
+  - `control` takes `{ action, value }`: play/pause, next, previous, seek (`value` in ms) and volume (`value` 0–100).
+  - `get_capabilities` returns `{ transport, seek, volume, events }`: which of those controls work on this platform, and whether the plugin emits change events.
   - `check_permission` / `request_permission` matter on Android only.
-  - Desktop reads run on a blocking thread so a slow `osascript` or WinRT call never stalls the async runtime.
+  - Desktop reads run on a blocking thread so a slow `osascript`, WinRT or D-Bus call never stalls the async runtime.
+  - On macOS the plugin observes Spotify's `com.spotify.client.PlaybackStateChanged` distributed notification, and on Linux the MPRIS `PropertiesChanged` signal. Each one emits the app event `nowplaying://changed` (no payload), and `get_capabilities` then reports `events: true`. A listener can call `get_now_playing` at once instead of waiting for the next poll.
   - On Android, a `NotificationListenerService` gives the app the right to list other apps' media sessions; the plugin then reads Spotify's (`com.spotify.music`) metadata and playback state.
 - **UI** (`app/src`), plain TypeScript modules:
   - `main.ts` holds the 1-second poll loop, the views and all rendering.
@@ -112,7 +115,7 @@ The app and the server are separate programs. The server can run on the same com
 1. **Detect.** Every second the UI calls `plugin:nowplaying|get_now_playing`.
    - If the device reports nothing and the fallback is on, it asks the server for `/v1/spotify/now-playing`, at most every 3 seconds.
    - Between those calls it moves the last known position forward locally.
-2. **Identify.** The track's identity is its Spotify ID when available (macOS, Web API), otherwise artist + title (Windows, Android). Nothing else happens until that identity changes.
+2. **Identify.** The track's identity is its Spotify ID when available (macOS, Linux, Web API), otherwise artist + title (Windows, Android). Nothing else happens until that identity changes.
 3. **Find the Songsterr page** (desktop):
    1. If you previously corrected this song with *Wrong tab?*, your pick is used.
    2. Otherwise the app cleans the title (drops "- Remastered", "(feat. X)", etc.) and searches through `/v1/songsterr/search`.
@@ -127,7 +130,7 @@ The app and the server are separate programs. The server can run on the same com
 5. **Show.**
    - **Songsterr view** (desktop default): Songsterr refuses iframes, so the page opens in a native child webview laid over the viewer area. Moving or resizing panels only repositions that webview; it never reloads the page.
    - **Local view:** alphaTab renders the tab. **Follow** builds a timeline of bar start times from the tab's time signatures and tempo, finds the bar at the current song position (plus your offset), highlights it and scrolls it into the upper third of the view.
-6. **Control** (desktop): the Spotify player strip shows artwork, progress and volume. It drives Spotify through `plugin:nowplaying|control`: AppleScript on macOS (transport, seek, volume) and SMTC on Windows (transport and seek; SMTC has no volume control).
+6. **Control** (desktop): the Spotify player strip shows artwork, progress and volume. It drives Spotify through `plugin:nowplaying|control`: AppleScript on macOS (transport, seek, volume), SMTC on Windows (transport and seek; SMTC has no volume control) and MPRIS on Linux (transport, seek, volume). On Android the plugin drives Spotify's `MediaController` (transport and seek) once Notification access is granted.
 7. **Updates.** At startup and every 6 hours, the app fetches the latest published release from the GitHub API (`releases/latest`) and compares it with its own version.
    - When the release is newer, it shows a system notification and a banner whose *Download* button opens the release page.
    - Each version is announced once (`tabsync.update.announced` in `localStorage`).
@@ -155,7 +158,9 @@ guitarfish/
 │   ├── public/logo.png             logo (favicon and sidebar brand mark)
 │   ├── src-tauri/                  Rust shell, tauri.conf.json, capabilities, icons
 │   └── plugins/tauri-plugin-nowplaying/
-│       ├── src/desktop.rs          macOS (AppleScript) + Windows (SMTC) detectors and controls
+│       ├── src/desktop.rs          macOS (AppleScript + change observer) + Windows (SMTC) detectors and controls
+│       ├── src/desktop/linux.rs    Linux detector and controls (MPRIS over D-Bus, zbus)
+│       ├── src/mpris.rs            MPRIS metadata → Track mapping (pure, tested on every OS)
 │       ├── src/mobile.rs           bridge to the Kotlin plugin
 │       └── android/                Kotlin plugin + NotificationListenerService
 ├── assets/                         logo.png (project logo), logo-1024.png (desktop icon source),
@@ -214,19 +219,25 @@ Environment variables: `PORT` (8787), `HOST` (0.0.0.0), `DB_FILE` (`server/data/
 | POST | `/auth/spotify/logout` | Forget the stored Spotify tokens |
 | GET | `/v1/spotify/now-playing` | Current track from the Spotify Web API |
 
-## 2. Desktop app (macOS, Windows)
+## 2. Desktop app (macOS, Windows, Linux)
 
-Prerequisites: [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/). That means Rust, plus Xcode Command Line Tools on macOS, or the MSVC Build Tools and WebView2 on Windows.
+Prerequisites: [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/). That means Rust, plus Xcode Command Line Tools on macOS, the MSVC Build Tools and WebView2 on Windows, or the WebKitGTK and D-Bus development packages on Linux. On Debian or Ubuntu:
+
+```bash
+sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev \
+  libssl-dev libdbus-1-dev patchelf build-essential file
+```
 
 ```bash
 cd app
 npm install
 npm run tauri dev          # development (Vite on :1420 + the Rust shell)
-npm run tauri build        # installer: .dmg/.app (macOS), .msi/.exe (Windows)
+npm run tauri build        # installer: .dmg/.app (macOS), .msi/.exe (Windows), .AppImage/.deb/.rpm (Linux)
 ```
 
 - **macOS:** the first time Guitarfish reads Spotify, macOS asks permission to control Spotify. If you click "Don't Allow" by mistake, re-enable it in System Settings → Privacy & Security → Automation. In `tauri dev` the prompt names your terminal app instead of Guitarfish.
 - **Windows:** no setup needed. Works with the Spotify desktop installer and the Microsoft Store version. SMTC doesn't expose the Spotify track ID, so Windows matches by artist and title only.
+- **Linux:** no setup needed. Guitarfish reads the Spotify desktop app (`.deb`, Snap or Flatpak) through MPRIS on the D-Bus session bus, including the Spotify track ID. The Spotify web player isn't detected; use the Web API fallback for it.
 - In the **Tools** sidebar, the server URL defaults to `http://127.0.0.1:8787`.
 
 ## 3. Android app
@@ -244,11 +255,12 @@ npm run tauri android build
 - In Settings, set the server URL to your computer's LAN IP (e.g. `http://192.168.1.20:8787`). The emulator uses `http://10.0.2.2:8787`, which is the default there.
 - Release builds block plain HTTP by default. Either serve the API over HTTPS, or allow cleartext traffic for your server in the generated Android manifest. The release workflow already does the latter.
 - To use it alongside Spotify, run Guitarfish in split-screen or as the foreground app. Spotify keeps playing in the background.
-- Android has no playback controls yet, and Songsterr opens in the browser because child webviews are desktop-only.
+- Play/pause, next, previous and seek go through Spotify's media session, so they need Notification access too. Volume isn't offered (that is the phone's media volume, not Spotify's).
+- Songsterr opens in the browser because child webviews are desktop-only.
 
 ## 4. Spotify Web API fallback (optional)
 
-Only used when the device sees nothing, e.g. when you're controlling playback on another device via Spotify Connect, or on Linux.
+Only used when the device sees nothing, e.g. when you're controlling playback on another device via Spotify Connect, or listening in the web player.
 
 1. Create an app at <https://developer.spotify.com/dashboard> and select the *Web API*.
 2. Add this exact redirect URI: `http://127.0.0.1:8787/auth/spotify/callback`. Spotify requires `127.0.0.1` here; `localhost` won't work.
@@ -276,11 +288,11 @@ The server requests the scopes `user-read-currently-playing` and `user-read-play
 
 ## 6. Tests, CI and releases
 
-- **Tests:** `npm test` in `server/` and in `app/` runs Vitest. `cargo test` in `app/plugins/tauri-plugin-nowplaying` covers the macOS output parser and control commands.
+- **Tests:** `npm test` in `server/` and in `app/` runs Vitest. `cargo test` in `app/plugins/tauri-plugin-nowplaying` covers the macOS output parser and control commands, and the MPRIS metadata mapping and control calls (those run on every OS).
 - **CI** (`.github/workflows/ci.yml`) runs on every push and pull request:
   - server typecheck and tests;
   - app typecheck, tests and build;
-  - plugin tests and `cargo clippy -D warnings` on macOS and Windows (each OS compiles different detector code);
+  - plugin tests and `cargo clippy -D warnings` on macOS, Windows and Linux (each OS compiles different detector code);
   - `cargo clippy` for the Android target, so the `#[cfg(mobile)]` code is checked before a release.
 - **Code review** (`.github/workflows/code-review.yml`) also runs on every push and pull request:
   - `cargo fmt --check`. The rules are in `rustfmt.toml`; run `cargo fmt` before pushing.
@@ -290,7 +302,7 @@ The server requests the scopes `user-read-currently-playing` and `user-read-play
   - It's advisory: it never fails the PR. A failed review shows a warning on the workflow run.
   - It only runs when the repository secret `ANTHROPIC_API_KEY` is set, and the [Claude GitHub App](https://github.com/apps/claude) must be installed on the repository.
   - It's the only workflow with write access to pull requests.
-- **Release** (`.github/workflows/release.yml`) first runs CI and Code review on the tagged commit with read-only tokens, and stops if either fails. Then it builds the installable apps and attaches them to a GitHub release: a universal `.dmg` for macOS, `.msi` and `.exe` installers for Windows, and a universal `.apk` for Android.
+- **Release** (`.github/workflows/release.yml`) first runs CI and Code review on the tagged commit with read-only tokens, and stops if either fails. Then it builds the installable apps and attaches them to a GitHub release: a universal `.dmg` for macOS, `.msi` and `.exe` installers for Windows, an `.AppImage` and a `.deb` for Linux (x86_64), and a universal `.apk` for Android.
   1. Set the new version with `scripts/bump-version.sh 0.3.0`. It updates `tauri.conf.json`, both `Cargo.toml` files, both `package.json` files and all four lockfiles. Commit the result.
   2. Push a matching tag: `git tag v0.3.0 && git push origin v0.3.0`. Every build runs, and the release is published when all succeed.
 
@@ -310,7 +322,7 @@ The server requests the scopes `user-read-currently-playing` and `user-read-play
 
 - Follow mode ignores repeats, and tempo changes only take effect at bar boundaries. Use the offset slider to compensate. *Next: a real tempo map, or alphaTab's external-media sync.*
 - Fuzzy matching scans every song in memory, which is fine up to a few tens of thousands of songs. *Next: Postgres + `pg_trgm`, which uses the same similarity metric.*
-- macOS detection polls `osascript` every second. *Next: listen for Spotify's `com.spotify.client.PlaybackStateChanged` system notification so updates are instant.*
-- Windows and Android support only Spotify. Removing the package or app-ID filter would allow other players.
+- The UI still polls `get_now_playing` every second (`osascript` on macOS). The plugin already emits `nowplaying://changed` on macOS and Linux. *Next: refresh on that event and poll less often.*
+- Windows, Linux and Android support only Spotify. Removing the package, app-ID or bus-name filter would allow other players.
 - No authentication on the API. Add it before exposing the server outside your network.
 - Tabs are copyrighted works. Only serve tabs you created, tabs licensed to you, or tabs from a licensed provider.

@@ -5,6 +5,7 @@ name: Release
 # them to a GitHub release:
 #   - Windows: .msi and .exe (NSIS) installers
 #   - macOS:   universal .dmg (Apple Silicon + Intel)
+#   - Linux:   .AppImage and .deb (x86_64)
 #   - Android: universal .apk
 #
 # Push a tag matching the app version (app/src-tauri/tauri.conf.json) to publish:
@@ -114,9 +115,24 @@ jobs:
             args: ""
             rust-targets: ""
             artifact: windows
+          - name: Linux
+            os: ubuntu-24.04
+            args: --bundles appimage,deb
+            rust-targets: ""
+            artifact: linux
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+      # Tauri's Linux build dependencies. libfuse2t64 lets the AppImage tooling
+      # (itself an AppImage) run on the runner. NO_STRIP: linuxdeploy's bundled
+      # strip can't read some of Ubuntu 24.04's libraries and fails the bundle.
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            libxdo-dev libssl-dev libdbus-1-dev patchelf build-essential file libfuse2t64
+          echo "NO_STRIP=true" >> "$GITHUB_ENV"
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -150,6 +166,8 @@ jobs:
             app/src-tauri/target/**/release/bundle/dmg/*.dmg
             app/src-tauri/target/**/release/bundle/msi/*.msi
             app/src-tauri/target/**/release/bundle/nsis/*.exe
+            app/src-tauri/target/**/release/bundle/appimage/*.AppImage
+            app/src-tauri/target/**/release/bundle/deb/*.deb
           if-no-files-found: error
 
   android:
