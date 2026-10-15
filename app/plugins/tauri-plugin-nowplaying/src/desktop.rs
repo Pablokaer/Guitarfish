@@ -1,8 +1,34 @@
 //! Desktop detectors. Each call does a fresh, synchronous read; the caller runs it
-//! on a blocking thread.
+//! on a blocking thread. Where the OS announces changes, [`start_events`] turns
+//! them into `nowplaying://changed` events.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use tauri::{AppHandle, Emitter, Runtime};
 
 use crate::models::{NowPlayingResponse, PlaybackCapabilities};
 use crate::Result;
+
+/// Set once the change observer is installed; reported as `events`.
+static EVENTS: AtomicBool = AtomicBool::new(false);
+
+/// Starts emitting [`crate::CHANGED_EVENT`] (no payload) whenever the player
+/// reports a change. Called once from the plugin's setup.
+pub(crate) fn start_events<R: Runtime>(app: &AppHandle<R>) {
+    let app = app.clone();
+    let emit = move || {
+        let _ = app.emit(crate::CHANGED_EVENT, ());
+    };
+    #[cfg(not(target_os = "windows"))]
+    let installed = imp::watch(emit);
+    // SMTC has change events too, but they aren't wired up yet.
+    #[cfg(target_os = "windows")]
+    let installed = {
+        drop(emit);
+        false
+    };
+    EVENTS.store(installed, Ordering::Relaxed);
+}
 
 /// Read the current track from the OS. `track: None` when nothing is playing,
 /// Spotify is closed, or an ad is playing.
@@ -16,7 +42,7 @@ pub fn control(action: &str, value: Option<f64>) -> Result<()> {
 }
 
 pub fn capabilities() -> PlaybackCapabilities {
-    imp::CAPABILITIES
+    PlaybackCapabilities { events: EVENTS.load(Ordering::Relaxed), ..imp::CAPABILITIES }
 }
 
 fn unsupported(action: &str) -> crate::Error {
@@ -33,7 +59,39 @@ mod imp {
     use crate::models::{spotify_track_id, NowPlayingResponse, PlaybackCapabilities, Track};
     use crate::{Error, Result};
 
-    pub const CAPABILITIES: PlaybackCapabilities = PlaybackCapabilities { transport: true, seek: true, volume: true };
+    // `events` is filled in at runtime, once `watch` succeeds.
+    pub const CAPABILITIES: PlaybackCapabilities =
+        PlaybackCapabilities { transport: true, seek: true, volume: true, events: false };
+
+    /// Calls `on_change` on the main thread each time Spotify posts the
+    /// `com.spotify.client.PlaybackStateChanged` distributed notification
+    /// (track change, play, pause, seek). No AppleScript runs for this, so it
+    /// never triggers the Automation prompt.
+    pub fn watch(on_change: impl Fn() + Send + 'static) -> bool {
+        use std::ptr::NonNull;
+
+        use block2::RcBlock;
+        use objc2_foundation::{NSDistributedNotificationCenter, NSNotification, NSOperationQueue, NSString};
+
+        let name = NSString::from_str("com.spotify.client.PlaybackStateChanged");
+        let block = RcBlock::new(move |_: NonNull<NSNotification>| on_change());
+        let center = NSDistributedNotificationCenter::defaultCenter();
+        // SAFETY: the name is a valid NSString, `object: None` accepts any sender,
+        // and the block only calls `on_change`, which is 'static and needs nothing
+        // from the notification.
+        let observer = unsafe {
+            center.addObserverForName_object_queue_usingBlock(
+                Some(&name),
+                None,
+                Some(&NSOperationQueue::mainQueue()),
+                &block,
+            )
+        };
+        // The observer is meant to live as long as the app, so its token is never
+        // released (removing it would need the token).
+        std::mem::forget(observer);
+        true
+    }
 
     // `application "Spotify" is running` is checked first so polling never
     // launches Spotify. Fields are separated by the ASCII unit separator (31),
@@ -145,7 +203,8 @@ mod imp {
     use crate::{Error, Result};
 
     // SMTC has no volume control; that belongs to the system mixer.
-    pub const CAPABILITIES: PlaybackCapabilities = PlaybackCapabilities { transport: true, seek: true, volume: false };
+    pub const CAPABILITIES: PlaybackCapabilities =
+        PlaybackCapabilities { transport: true, seek: true, volume: false, events: false };
 
     /// Windows FILETIME epoch (1601-01-01) to Unix epoch, in 100 ns ticks.
     const EPOCH_DIFF_100NS: i64 = 116_444_736_000_000_000;
@@ -265,7 +324,7 @@ mod imp {
     use crate::Result;
 
     pub const CAPABILITIES: PlaybackCapabilities =
-        PlaybackCapabilities { transport: false, seek: false, volume: false };
+        PlaybackCapabilities { transport: false, seek: false, volume: false, events: false };
 
     pub fn read() -> Result<NowPlayingResponse> {
         Ok(NowPlayingResponse { track: None })
@@ -273,6 +332,10 @@ mod imp {
 
     pub fn control(action: &str, _value: Option<f64>) -> Result<()> {
         Err(super::unsupported(action))
+    }
+
+    pub fn watch(_on_change: impl Fn() + Send + 'static) -> bool {
+        false
     }
 }
 

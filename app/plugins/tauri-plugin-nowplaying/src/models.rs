@@ -45,6 +45,10 @@ pub struct PlaybackCapabilities {
     pub transport: bool,
     pub seek: bool,
     pub volume: bool,
+    /// The plugin emits `nowplaying://changed` when the track or play state
+    /// changes, so the UI can refresh at once instead of waiting for its next poll.
+    #[serde(default)]
+    pub events: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

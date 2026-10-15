@@ -11,6 +11,20 @@ tauri = "2"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 
+# macOS: observe Spotify's PlaybackStateChanged distributed notification.
+# The same versions tauri/wry already use, so nothing is built twice.
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = [
+  "std",
+  "block2",
+  "NSDistributedNotificationCenter",
+  "NSNotification",
+  "NSObject",
+  "NSOperation",
+  "NSString",
+] }
+
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [
   "Foundation",

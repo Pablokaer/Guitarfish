@@ -3160,6 +3160,8 @@ dependencies = [
 name = "tauri-plugin-nowplaying"
 version = "0.3.0"
 dependencies = [
+ "block2",
+ "objc2-foundation",
  "serde",
  "tauri",
  "tauri-plugin",
