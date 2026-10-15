@@ -3,7 +3,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { clearCachedLookup, TabApi, trackKey } from "./api";
+import { clearCachedLookup, TabApi } from "./api";
 import { Detector } from "./detector";
 import { EmbeddedPage } from "./embed";
 import { hydrateIcons, icon } from "./icons";
@@ -19,14 +19,13 @@ import {
 import { EntryStore, isSongPage, PickStore, pushHistory, toEntry, toggleFavorite, toResult, type TabEntry } from "./library";
 import { isConfidentMatch, songsterrQuery, songsterrSearchPage } from "./match";
 import { loadSettings, saveSettings } from "./settings";
-import { syncStatus, type SearchPhase, type SyncStatus } from "./status";
+import { syncStatus, type SyncStatus } from "./status";
 import "./styles.css";
+import { SyncController } from "./sync";
 import type { PlaybackCapabilities, Song, SongsterrResult, TabInfo, Track } from "./types";
 import { checkForUpdate, type UpdateInfo } from "./update";
 import { TabViewer } from "./viewer";
 
-const POLL_MS = 1000;
-const RETRY_MS = 5000;
 /** How often a running app looks for a new release (also checked at startup). */
 const UPDATE_CHECK_MS = 6 * 60 * 60 * 1000;
 /** A little longer than the CSS panel transitions (--t). */
@@ -143,6 +142,33 @@ const viewer = new TabViewer(el.tab, el.local, settings.zoom);
 const history = new EntryStore("tabsync.history");
 const favorites = new EntryStore("tabsync.favorites");
 const picks = new PickStore();
+/** Detector polling and the tab lookup for each new track; the UI below renders it. */
+const sync = new SyncController({
+  detector,
+  api,
+  picks,
+  settings,
+  ui: {
+    nowPlaying: () => renderNowPlaying(),
+    trackChanged: () => {
+      currentSong = null;
+      localHow = "";
+      viewer.hideHighlight();
+      el.tabSelect.hidden = true;
+      showPanel(null);
+    },
+    status: () => renderStatus(),
+    openSongsterr: (r) => void openSongsterr(r, "auto"),
+    serverUnreachable: (down) => {
+      if (down) showBanner(`Can't reach the tab server at <code>${escapeHtml(settings.serverUrl)}</code>. Check it in the Tools sidebar. Retrying…`, "warn");
+      else if (el.banner.textContent?.includes("Can't reach the tab server")) showBanner(null);
+    },
+    localMatch: (song, how) => openSong(song, how),
+    localMiss: (track, candidates) => showLocalMiss(track, candidates),
+    renderStage: () => renderStage(),
+    renderAll: () => renderAll(),
+  },
+});
 
 // ---- State ---------------------------------------------------------------------
 type View = "tab" | "search" | "history" | "favorites";
@@ -152,33 +178,18 @@ let layout: LayoutState = loadLayout();
 /** The user expanded the nav although the window is narrow enough to compact it. */
 let wideNav = false;
 let view: View = "tab";
-let current: Track | null = null; // last detector reading
-let currentKey: string | null = null; // identity of the track we looked up
-let readAt = performance.now(); // when `current` was read, for smooth progress
-let lookupSeq = 0; // discards stale lookups when tracks change quickly
-let phase: SearchPhase = "idle";
-let songsterrResults: SongsterrResult[] = []; // Songsterr search results for the current track
-let songsterrBest: SongsterrResult | null = null; // what Guitarfish would show for the current track
 let shown: SongsterrResult | null = null; // the Songsterr page in the viewer
 let currentSong: Song | null = null; // local catalogue match
 let localHow = "";
 let caps: PlaybackCapabilities = { transport: false, seek: false, volume: false };
 let volumeHoldUntil = 0; // ignore polled volume while the user drags the slider
 let lastVolume = 50;
-let polling = false;
 
 // ---- Helpers -------------------------------------------------------------------
 function fmt(ms?: number | null): string {
   if (ms == null || ms < 0) return "–:––";
   const s = Math.floor(ms / 1000);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-}
-
-function livePosition(): number | null {
-  if (!current || current.positionMs == null) return null;
-  const extra = current.isPlaying ? performance.now() - readAt : 0;
-  const pos = current.positionMs + extra;
-  return current.durationMs ? Math.min(pos, current.durationMs) : pos;
 }
 
 function escapeHtml(s: string): string {
@@ -274,7 +285,7 @@ function focusSearch() {
     el.tbSearchInput.focus();
     el.tbSearchInput.select();
   } else {
-    void showSearch(el.tbSearchInput.value || (current ? songsterrQuery(current) : ""), null);
+    void showSearch(el.tbSearchInput.value || (sync.current ? songsterrQuery(sync.current) : ""), null);
   }
 }
 
@@ -329,7 +340,7 @@ function setSource(src: Source) {
   if (!embed) return;
   settings.songsterrPanel = src === "songsterr";
   saveSettings(settings);
-  if (src === "songsterr" && !shown && songsterrBest) void openSongsterr(songsterrBest, "auto");
+  if (src === "songsterr" && !shown && sync.best) void openSongsterr(sync.best, "auto");
   setView("tab");
 }
 
@@ -385,7 +396,7 @@ function renderToolbar() {
   el.fav.title = isFav ? "Remove from favorites" : "Save to favorites";
   el.fav2.innerHTML = `${icon(isFav ? "starFilled" : "star", 14)}<span>${isFav ? "Saved" : "Save"}</span>`;
   el.refresh.disabled = !embed?.isOpen || local;
-  const ext = shown?.url ?? songsterrBest?.url ?? null;
+  const ext = shown?.url ?? sync.best?.url ?? null;
   el.external.disabled = !ext;
   el.openSongsterr.disabled = !ext;
 }
@@ -420,15 +431,10 @@ function toggleFavoriteShown() {
 function currentStatus(): SyncStatus {
   return syncStatus({
     detectorError: detector.status.kind === "error" ? detector.status.message : null,
-    hasTrack: !!current,
-    isPlaying: !!current?.isPlaying,
-    phase,
+    hasTrack: !!sync.current,
+    isPlaying: !!sync.current?.isPlaying,
+    phase: sync.phase,
   });
-}
-
-function setPhase(p: SearchPhase) {
-  phase = p;
-  renderStatus();
 }
 
 function renderStatus() {
@@ -449,15 +455,15 @@ function renderStatus() {
 function renderMatchInfo() {
   const bits: string[] = [];
   if (shown) {
-    const how = shown === songsterrBest ? { found: "matches title and artist", picked: "your pick for this song", uncertain: "closest result, not a confident match", none: "Songsterr search page" }[phase as string] : "opened manually";
+    const how = shown === sync.best ? { found: "matches title and artist", picked: "your pick for this song", uncertain: "closest result, not a confident match", none: "Songsterr search page" }[sync.phase as string] : "opened manually";
     bits.push(`<span class="m-title">${escapeHtml(label(shown))}</span><span class="m-sub">Songsterr${how ? ` · ${escapeHtml(how)}` : ""}</span>`);
-  } else if (songsterrBest && current) {
-    bits.push(`<span class="m-title">${escapeHtml(label(songsterrBest))}</span><span class="m-sub">Ready on Songsterr, not opened</span>`);
+  } else if (sync.best && sync.current) {
+    bits.push(`<span class="m-title">${escapeHtml(label(sync.best))}</span><span class="m-sub">Ready on Songsterr, not opened</span>`);
   }
   if (currentSong) bits.push(`<span class="m-sub">Local catalogue: ${escapeHtml(`${currentSong.artist} – ${currentSong.title}`)}${localHow ? ` · ${escapeHtml(localHow)}` : ""}</span>`);
   el.matchInfo.innerHTML = bits.join("") || `<span class="muted">No tab open</span>`;
-  el.searchAgain.disabled = !current;
-  el.wrong.disabled = !current;
+  el.searchAgain.disabled = !sync.current;
+  el.wrong.disabled = !sync.current;
 }
 
 /** What the viewer area shows before (or instead of) a Songsterr page. */
@@ -467,25 +473,25 @@ function renderEmpty(s: SyncStatus) {
   let title = s.label;
   let text = s.detail ?? "";
   let action: { label: string; run: () => void } | null = null;
-  if (!current) {
+  if (!sync.current) {
     if (s.tone !== "error") {
       title = "Play something on Spotify";
       text = "Guitarfish detects the song and opens its tablature from Songsterr here.";
     }
-  } else if (phase === "searching") {
+  } else if (sync.phase === "searching") {
     iconName = "search";
-    text = current ? `Looking for “${current.title}” by ${current.artist}` : "";
-  } else if (phase === "paused" && current) {
+    text = sync.current ? `Looking for “${sync.current.title}” by ${sync.current.artist}` : "";
+  } else if (sync.phase === "paused" && sync.current) {
     title = "Automatic search is off";
-    text = `Now playing “${current.title}”.`;
-    action = { label: "Find tab", run: () => void searchSongsterrFor(current!, lookupSeq) };
-  } else if (songsterrBest && current) {
+    text = `Now playing “${sync.current.title}”.`;
+    action = { label: "Find tab", run: () => void sync.searchCurrent() };
+  } else if (sync.best && sync.current) {
     iconName = "guitar";
-    title = phase === "found" || phase === "picked" ? "Tablature ready" : s.label;
-    text = `${label(songsterrBest)} · Follow Spotify is off, so the current page was left alone.`;
-    action = { label: "Open tab", run: () => void openSongsterr(songsterrBest!, "manual") };
+    title = sync.phase === "found" || sync.phase === "picked" ? "Tablature ready" : s.label;
+    text = `${label(sync.best)} · Follow Spotify is off, so the current page was left alone.`;
+    action = { label: "Open tab", run: () => void openSongsterr(sync.best!, "manual") };
   }
-  const card = emptyCard(phase === "searching" ? "busy" : s.tone, iconName, title, text);
+  const card = emptyCard(sync.phase === "searching" ? "busy" : s.tone, iconName, title, text);
   if (action) {
     const b = document.createElement("button");
     b.className = "btn primary";
@@ -525,7 +531,7 @@ function renderArt(url: string | null) {
 }
 
 function renderNowPlaying() {
-  const t = current;
+  const t = sync.current;
   el.title.textContent = t ? t.title : "Waiting for Spotify…";
   el.artist.textContent = t ? t.artist + (t.album ? ` · ${t.album}` : "") : "Play a song in Spotify on this device";
   el.stripTitle.textContent = t ? t.title : "Waiting for Spotify…";
@@ -571,19 +577,19 @@ function renderVolume() {
 }
 
 function renderTitlebar() {
-  el.titlebarText.textContent = layout.focus && current ? `${current.title} — ${current.artist}` : "Guitarfish";
+  el.titlebarText.textContent = layout.focus && sync.current ? `${sync.current.title} — ${sync.current.artist}` : "Guitarfish";
 }
 
 function tick() {
-  const pos = livePosition();
-  const dur = current?.durationMs ?? null;
-  if (current && pos != null) {
+  const pos = sync.livePosition();
+  const dur = sync.current?.durationMs ?? null;
+  if (sync.current && pos != null) {
     const pct = dur ? Math.min(100, (pos / dur) * 100) : 0;
     el.pos.textContent = fmt(pos);
     el.dur.textContent = fmt(dur);
     el.progressFill.style.width = `${pct}%`;
     el.progress.setAttribute("aria-valuenow", String(Math.round(pct)));
-    if (settings.follow && currentSong && current.isPlaying && source() === "local") {
+    if (settings.follow && currentSong && sync.current.isPlaying && source() === "local") {
       viewer.follow(pos + settings.followOffsetSec * 1000);
     }
   } else {
@@ -600,7 +606,7 @@ async function control(action: "playpause" | "next" | "previous" | "seek" | "vol
   } catch (e) {
     showBanner(`Spotify didn't accept the command. <small>${escapeHtml(String(e))}</small>`, "warn");
   }
-  void poll();
+  void sync.poll();
 }
 
 async function loadCapabilities() {
@@ -614,10 +620,9 @@ async function loadCapabilities() {
 
 function bindPlayer() {
   el.play.onclick = () => {
-    if (current) {
+    if (sync.current) {
       // Optimistic, so the button reacts before the next poll.
-      current = { ...current, positionMs: livePosition(), isPlaying: !current.isPlaying };
-      readAt = performance.now();
+      sync.patchCurrent({ positionMs: sync.livePosition(), isPlaying: !sync.current.isPlaying });
       renderNowPlaying();
     }
     void control("playpause");
@@ -625,11 +630,10 @@ function bindPlayer() {
   el.prev.onclick = () => void control("previous");
   el.next.onclick = () => void control("next");
   el.progress.onclick = (ev) => {
-    if (!el.progress.classList.contains("seekable") || !current?.durationMs) return;
+    if (!el.progress.classList.contains("seekable") || !sync.current?.durationMs) return;
     const r = el.progress.getBoundingClientRect();
-    const ms = Math.round(((ev.clientX - r.left) / r.width) * current.durationMs);
-    current = { ...current, positionMs: ms };
-    readAt = performance.now();
+    const ms = Math.round(((ev.clientX - r.left) / r.width) * sync.current.durationMs);
+    sync.patchCurrent({ positionMs: ms });
     void control("seek", ms);
   };
   let volTimer = 0;
@@ -741,114 +745,24 @@ function catalogueRows(track: Track | null, songs: Song[]): HTMLElement {
   return list;
 }
 
-async function lookupLocal(track: Track, seq: number) {
-  try {
-    const r = await api.lookup(track);
-    if (seq !== lookupSeq) return;
-    if (r.match) {
-      const how = r.method === "fuzzy" ? `fuzzy ${Math.round(r.confidence * 100)}%` : r.method;
-      await openSong(r.match, how);
-    } else {
-      viewer.clear();
-      el.tabSelect.hidden = true;
-      const wrap = document.createElement("div");
-      wrap.className = "page-inner";
-      wrap.innerHTML = `<div class="page-head"><h1>Not in the local catalogue</h1></div>`;
-      const sw = document.createElement("button");
-      sw.className = "btn";
-      sw.type = "button";
-      sw.textContent = "Show Songsterr instead";
-      sw.hidden = !embed;
-      sw.onclick = () => setSource("songsterr");
-      wrap.querySelector(".page-head")!.appendChild(sw);
-      wrap.insertAdjacentHTML("beforeend", `<div class="list-title">${r.candidates.length ? "Is it one of these?" : "No candidates"}</div>`);
-      wrap.appendChild(catalogueRows(track, r.candidates));
-      showPanel(wrap);
-      renderStage();
-    }
-  } catch (e) {
-    if (seq !== lookupSeq) return;
-    // Only the local catalogue is retried; the Songsterr side has its own retry.
-    console.warn("local lookup failed", e);
-    setTimeout(() => {
-      if (seq === lookupSeq) void lookupLocal(track, seq);
-    }, RETRY_MS);
-  }
-}
-
-// ---- Track changes -------------------------------------------------------------
-async function searchSongsterrFor(track: Track, seq: number) {
-  const query = songsterrQuery(track);
-  setPhase("searching");
-  let rs: SongsterrResult[];
-  try {
-    rs = await api.songsterrSearch(query);
-  } catch (e) {
-    if (seq !== lookupSeq) return;
-    console.warn("songsterr search failed", e);
-    setPhase("server-error");
-    showBanner(`Can't reach the tab server at <code>${escapeHtml(settings.serverUrl)}</code>. Check it in the Tools sidebar. Retrying…`, "warn");
-    // Songsterr's own search page works without our server.
-    songsterrBest = songsterrSearchPage(query);
-    if (settings.followSpotify) void openSongsterr(songsterrBest, "auto");
-    setTimeout(() => {
-      if (seq === lookupSeq && phase === "server-error") void searchSongsterrFor(track, seq);
-    }, RETRY_MS);
-    return;
-  }
-  if (seq !== lookupSeq) return;
-  if (el.banner.textContent?.includes("Can't reach the tab server")) showBanner(null);
-  songsterrResults = rs;
-  const confident = rs.find((r) => isConfidentMatch(track, r)) ?? null;
-  songsterrBest = confident ?? rs[0] ?? songsterrSearchPage(query);
-  setPhase(confident ? "found" : rs.length ? "uncertain" : "none");
-  if (settings.followSpotify) void openSongsterr(songsterrBest, "auto");
-  else renderAll();
-}
-
-async function onTrackChanged(track: Track) {
-  const seq = ++lookupSeq;
-  currentSong = null;
-  localHow = "";
-  songsterrResults = [];
-  songsterrBest = null;
-  viewer.hideHighlight();
+/** Not in the local catalogue: offer the candidates and a way back to Songsterr. */
+function showLocalMiss(track: Track, candidates: Song[]) {
+  viewer.clear();
   el.tabSelect.hidden = true;
-  showPanel(null);
-
-  const pick = picks.get(trackKey(track));
-  if (pick) {
-    songsterrBest = pick;
-    setPhase("picked");
-    if (settings.followSpotify) void openSongsterr(pick, "auto");
-  } else if (settings.autoSearch) {
-    void searchSongsterrFor(track, seq);
-  } else {
-    setPhase("paused");
-  }
+  const wrap = document.createElement("div");
+  wrap.className = "page-inner";
+  wrap.innerHTML = `<div class="page-head"><h1>Not in the local catalogue</h1></div>`;
+  const sw = document.createElement("button");
+  sw.className = "btn";
+  sw.type = "button";
+  sw.textContent = "Show Songsterr instead";
+  sw.hidden = !embed;
+  sw.onclick = () => setSource("songsterr");
+  wrap.querySelector(".page-head")!.appendChild(sw);
+  wrap.insertAdjacentHTML("beforeend", `<div class="list-title">${candidates.length ? "Is it one of these?" : "No candidates"}</div>`);
+  wrap.appendChild(catalogueRows(track, candidates));
+  showPanel(wrap);
   renderStage();
-  await lookupLocal(track, seq);
-}
-
-async function poll() {
-  if (polling) return;
-  polling = true;
-  try {
-    const track = await detector.read();
-    current = track;
-    readAt = performance.now();
-    renderNowPlaying();
-    if (track) {
-      const key = trackKey(track);
-      if (key !== currentKey) {
-        currentKey = key;
-        void onTrackChanged(track);
-      }
-    }
-    renderStatus();
-  } finally {
-    polling = false;
-  }
 }
 
 // ---- Pages -----------------------------------------------------------------------
@@ -863,7 +777,7 @@ function songsterrRows(results: SongsterrResult[], onPick: (r: SongsterrResult) 
     const b = document.createElement("button");
     b.type = "button";
     b.className = "row";
-    const confident = current && isConfidentMatch(current, r) ? `<span class="row-meta score">match</span>` : "";
+    const confident = sync.current && isConfidentMatch(sync.current, r) ? `<span class="row-meta score">match</span>` : "";
     b.innerHTML = `${icon("guitar", 16)}<span class="row-main"><span class="row-title">${escapeHtml(r.title)}</span><span class="row-sub">${escapeHtml([r.artist, r.instruments.slice(0, 4).join(" · ")].filter(Boolean).join("  ·  "))}</span></span>${confident}`;
     if (shown?.url === r.url) b.insertAdjacentHTML("beforeend", `<span class="row-meta">showing</span>`);
     b.onclick = () => onPick(r);
@@ -908,11 +822,7 @@ async function showSearch(query: string, correction: Track | null) {
   const slotL = inner.querySelector<HTMLElement>('[data-slot="local"]')!;
 
   const pickSongsterr = (r: SongsterrResult) => {
-    if (correction && currentKey === trackKey(correction)) {
-      picks.set(trackKey(correction), r);
-      songsterrBest = r;
-      setPhase("picked");
-    }
+    if (correction) sync.pick(correction, r);
     void openSongsterr(r, "manual");
   };
   void api.songsterrSearch(query).then(
@@ -1028,12 +938,12 @@ function bindTools() {
     settings.followSpotify = el.setFollowSpotify.checked;
     saveSettings(settings);
     // Turning it on catches up with the song that's playing now.
-    if (settings.followSpotify && songsterrBest && current) void openSongsterr(songsterrBest, "auto");
+    if (settings.followSpotify && sync.best && sync.current) void openSongsterr(sync.best, "auto");
   };
   el.setAutoSearch.onchange = () => {
     settings.autoSearch = el.setAutoSearch.checked;
     saveSettings(settings);
-    if (settings.autoSearch && current && phase === "paused") void searchSongsterrFor(current, lookupSeq);
+    if (settings.autoSearch && sync.current && sync.phase === "paused") void sync.searchCurrent();
   };
   el.setFallback.onchange = () => {
     settings.spotifyFallback = el.setFallback.checked;
@@ -1044,7 +954,7 @@ function bindTools() {
     settings.serverUrl = el.setServer.value.trim().replace(/\/+$/, "");
     api.setBaseUrl(settings.serverUrl);
     saveSettings(settings);
-    currentKey = null; // look the current song up again on the new server
+    sync.relookup(); // look the current song up again on the new server
     void refreshSpotifyStatus();
   };
   el.testBtn.onclick = async () => {
@@ -1084,21 +994,14 @@ function bindTools() {
     if (tab) await openTab(tab);
   };
 
-  el.searchAgain.onclick = () => {
-    if (!current) return;
-    picks.set(trackKey(current), null);
-    clearCachedLookup(current);
-    const seq = ++lookupSeq;
-    void searchSongsterrFor(current, seq);
-    void lookupLocal(current, seq);
-  };
+  el.searchAgain.onclick = () => void sync.searchAgain();
   el.wrong.onclick = () => {
-    if (!current) return;
-    clearCachedLookup(current);
-    void showSearch(songsterrQuery(current), current);
+    if (!sync.current) return;
+    clearCachedLookup(sync.current);
+    void showSearch(songsterrQuery(sync.current), sync.current);
   };
   el.openSongsterr.onclick = () => {
-    const url = shown?.url ?? songsterrBest?.url;
+    const url = shown?.url ?? sync.best?.url;
     if (url) void openExternal(url);
   };
   el.fav2.onclick = toggleFavoriteShown;
@@ -1127,7 +1030,7 @@ function bindChrome() {
   el.fav.onclick = toggleFavoriteShown;
   el.refresh.onclick = () => void embed?.reload();
   el.external.onclick = () => {
-    const url = shown?.url ?? songsterrBest?.url;
+    const url = shown?.url ?? sync.best?.url;
     if (url) void openExternal(url);
   };
   el.tbSearch.onsubmit = (ev) => {
@@ -1141,10 +1044,10 @@ function bindChrome() {
   for (const b of el.navItems) {
     b.onclick = () => {
       const v = b.dataset.view as View;
-      if (v === "search") return void showSearch(el.tbSearchInput.value.trim() || (current ? songsterrQuery(current) : ""), null);
-      if (v === "tab" && songsterrBest && current && settings.followSpotify && source() === "songsterr" && shown?.url !== songsterrBest.url) {
+      if (v === "search") return void showSearch(el.tbSearchInput.value.trim() || (sync.current ? songsterrQuery(sync.current) : ""), null);
+      if (v === "tab" && sync.best && sync.current && settings.followSpotify && source() === "songsterr" && shown?.url !== sync.best.url) {
         // Back from a history tab to the song that is playing.
-        return void openSongsterr(songsterrBest, "manual");
+        return void openSongsterr(sync.best, "manual");
       }
       setView(v);
     };
@@ -1262,8 +1165,7 @@ async function main() {
   await loadCapabilities();
   renderNowPlaying();
   await ensurePermission();
-  await poll();
-  setInterval(() => void poll(), POLL_MS);
+  await sync.start();
   void checkUpdates();
   setInterval(() => void checkUpdates(), UPDATE_CHECK_MS);
 }
