@@ -6,11 +6,13 @@ import {
   insertSong,
   insertTab,
   linkExternalId,
+  syncLibrary,
   tabsForSong,
   type Db,
   type SongRow,
   type TabFormat,
 } from "./db.js";
+import { parseSyncRequest } from "./library.js";
 import { lookup, search } from "./matching.js";
 import { searchSongsterr } from "./songsterr.js";
 import * as spotify from "./spotify.js";
@@ -21,6 +23,8 @@ export interface AppOptions {
   logger?: boolean;
   /** Injected in tests so they don't hit songsterr.com. */
   songsterrFetch?: typeof fetch;
+  /** Server clock (epoch ms); injected in tests. */
+  now?: () => number;
 }
 
 /** Public shape of a song, with its available tabs. */
@@ -156,6 +160,17 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       req.log.warn({ err: e }, "songsterr search failed");
       return reply.code(502).send({ error: "Songsterr search failed" });
     }
+  });
+
+  // ---- Library: history and favorites synced across devices --------------
+  app.get("/v1/library", async () => syncLibrary(db, {}));
+
+  // Push local changes (entries, and { songId, deletedAt } removals). The reply is
+  // the merged lists, which the device adopts as its own.
+  app.post("/v1/library/sync", { bodyLimit: 2 * 1024 * 1024 }, async (req, reply) => {
+    const parsed = parseSyncRequest(req.body, (opts.now ?? Date.now)());
+    if (!parsed.ok) return reply.code(400).send({ error: parsed.error });
+    return syncLibrary(db, parsed.value);
   });
 
   // ---- Spotify fallback ---------------------------------------------------
