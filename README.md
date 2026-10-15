@@ -1,6 +1,13 @@
-<p align="center"><img src="assets/logo.png" alt="Guitarfish logo" width="160" /></p>
+<p align="center">
+  <img src="assets/logo.png" alt="Guitarfish logo: a manta ray inside a guitar pick" width="280" />
+</p>
 
-# Guitarfish
+<h1 align="center">Guitarfish</h1>
+
+<p align="center">
+  <b>The guitar tab of the song you're playing on Spotify, in time with the music.</b><br />
+  macOS · Windows · Linux · Android · <a href="https://github.com/Pablokaer/Guitarfish/releases/latest">Download the latest release</a>
+</p>
 
 Guitarfish runs alongside Spotify. When the song changes, it detects the new track, finds a guitar tab for it and shows it: either the song's page on [Songsterr](https://www.songsterr.com) (desktop) or a tab from your own catalogue, rendered locally and scrolled in time with the song.
 
