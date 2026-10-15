@@ -14,11 +14,14 @@ export interface Track {
   player: string;
 }
 
+/** How a tab file is stored: alphaTab reads alphaTex as text, the others as bytes. */
+export type TabFormat = "alphatex" | "gp" | "musicxml";
+
 export interface TabInfo {
   id: number;
   instrument: string;
   tuning: string | null;
-  format: "alphatex" | "gp" | "musicxml";
+  format: TabFormat;
   version: number;
   rating: number | null;
   isPlaceholder: boolean;
