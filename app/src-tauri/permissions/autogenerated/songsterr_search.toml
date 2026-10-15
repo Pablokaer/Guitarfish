@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-songsterr-search"
+description = "Enables the songsterr_search command without any pre-configured scope."
+commands.allow = ["songsterr_search"]
+
+[[permission]]
+identifier = "deny-songsterr-search"
+description = "Denies the songsterr_search command without any pre-configured scope."
+commands.deny = ["songsterr_search"]

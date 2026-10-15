@@ -9,6 +9,7 @@
     "core:default",
     "opener:default",
     "nowplaying:default",
+    "allow-songsterr-search",
     "core:webview:allow-create-webview",
     "core:webview:allow-set-webview-position",
     "core:webview:allow-set-webview-size",

@@ -3,7 +3,16 @@
 //! search endpoint their site calls, and only returns links. Tab content stays on
 //! Songsterr (their terms don't allow copying it), so the app opens it there.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
+use std::time::Duration;
+
+const SEARCH_URL: &str = "https://www.songsterr.com/api/songs";
+const TIMEOUT: Duration = Duration::from_secs(5);
+/// Results asked of Songsterr per search.
+const RESULTS: &str = "5";
+/// Longer queries are cut to this many characters.
+const MAX_QUERY_CHARS: usize = 200;
 
 /// A song in Songsterr's catalogue: only a link, the tab itself stays on Songsterr.
 /// Same shape as `SongsterrResult` in the UI (`app/src/types.ts`).
@@ -17,19 +26,93 @@ pub struct SongsterrResult {
     pub url: String,
 }
 
+/// One entry of Songsterr's answer, as far as Guitarfish uses it.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawSong {
+    song_id: u64,
+    title: String,
+    artist: String,
+    #[serde(default)]
+    is_junk: Option<bool>,
+    #[serde(default)]
+    tracks: Vec<RawTrack>,
+}
+
+#[derive(Deserialize)]
+struct RawTrack {
+    #[serde(default)]
+    instrument: Option<String>,
+}
+
 /// Stable link: Songsterr redirects it to the song's canonical page.
-pub fn song_url(_song_id: u64) -> String {
-    todo!()
+pub fn song_url(song_id: u64) -> String {
+    format!("https://www.songsterr.com/a/wa/song?id={song_id}")
 }
 
 /// The query to send: trimmed and capped in length. None when there is nothing to search.
-pub fn clean_query(_query: &str) -> Option<String> {
-    todo!()
+pub fn clean_query(query: &str) -> Option<String> {
+    let q = query.trim();
+    (!q.is_empty()).then(|| q.chars().take(MAX_QUERY_CHARS).collect())
 }
 
 /// Songsterr's JSON answer as results: junk entries dropped, instruments listed once.
-pub fn parse_results(_body: &str) -> Result<Vec<SongsterrResult>, String> {
-    todo!()
+pub fn parse_results(body: &str) -> Result<Vec<SongsterrResult>, String> {
+    let items: Vec<serde_json::Value> =
+        serde_json::from_str(body).map_err(|e| format!("unexpected answer from Songsterr: {e}"))?;
+    Ok(items
+        .into_iter()
+        // An entry whose shape Songsterr changed is skipped; the others still count.
+        .filter_map(|v| serde_json::from_value::<RawSong>(v).ok())
+        .filter(|s| s.is_junk != Some(true))
+        .map(|s| {
+            let mut instruments: Vec<String> = Vec::new();
+            for name in s.tracks.into_iter().filter_map(|t| t.instrument) {
+                if !instruments.contains(&name) {
+                    instruments.push(name);
+                }
+            }
+            SongsterrResult {
+                url: song_url(s.song_id),
+                song_id: s.song_id,
+                title: s.title,
+                artist: s.artist,
+                instruments,
+            }
+        })
+        .collect())
+}
+
+/// One HTTP client for the app's lifetime (connection reuse, one TLS setup).
+static AGENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(TIMEOUT))
+        .https_only(true)
+        .user_agent(concat!("Guitarfish/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .into()
+});
+
+/// Blocking request to Songsterr's search: the body of a successful answer.
+fn fetch(query: &str) -> Result<String, String> {
+    AGENT
+        .get(SEARCH_URL)
+        .query_pairs([("pattern", query), ("size", RESULTS)])
+        .call()
+        .and_then(|mut res| res.body_mut().read_to_string())
+        .map_err(|e| format!("Songsterr search failed: {e}"))
+}
+
+/// Searches Songsterr for `query` (e.g. "Muse Uprising"); an empty query finds nothing.
+/// Failures (offline, no answer within 5 s, an HTTP error status, an unexpected
+/// answer) come back as a message. The UI then shows Songsterr as unreachable and retries.
+#[tauri::command]
+pub async fn songsterr_search(query: String) -> Result<Vec<SongsterrResult>, String> {
+    let Some(query) = clean_query(&query) else { return Ok(Vec::new()) };
+    // ureq is blocking: keep it off the async runtime's worker threads.
+    tauri::async_runtime::spawn_blocking(move || parse_results(&fetch(&query)?))
+        .await
+        .map_err(|e| format!("Songsterr search failed: {e}"))?
 }
 
 #[cfg(test)]
@@ -127,5 +210,21 @@ mod tests {
         let q = clean_query(&long).unwrap();
         assert_eq!(q.chars().count(), 200);
         assert!(q.chars().all(|c| c == 'é'));
+    }
+
+    #[test]
+    fn an_empty_query_finds_nothing_without_a_request() {
+        let r = tauri::async_runtime::block_on(songsterr_search("  ".into()));
+        assert_eq!(r, Ok(vec![]));
+    }
+
+    /// Calls the real Songsterr: `cargo test -- --ignored live_search` (needs the network).
+    #[test]
+    #[ignore]
+    fn live_search_answers_in_the_expected_shape() {
+        let results = tauri::async_runtime::block_on(songsterr_search("Muse Uprising".into())).unwrap();
+        let hit = results.iter().find(|r| r.title == "Uprising" && r.artist == "Muse").expect("Uprising by Muse");
+        assert_eq!(hit.url, song_url(hit.song_id));
+        assert!(!hit.instruments.is_empty());
     }
 }
