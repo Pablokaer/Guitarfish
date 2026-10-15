@@ -1,19 +1,7 @@
-import type { Change, LibraryLists } from "./library";
 import type { LookupResponse, Song, SongsterrResult, TabInfo, Track } from "./types";
 
 const LOOKUP_CACHE_PREFIX = "tabsync.lookup.";
 const LOOKUP_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-
-/** A non-OK answer from the server, with its status. */
-export class HttpError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message);
-    this.name = "HttpError";
-  }
-}
 
 /** Client for the Guitarfish server ("our system"), with a small local cache. */
 export class TabApi {
@@ -27,7 +15,7 @@ export class TabApi {
 
   private async json<T>(path: string, init?: RequestInit): Promise<T> {
     const res = await fetch(`${this.baseUrl}${path}`, init);
-    if (!res.ok) throw new HttpError(res.status, `${init?.method ?? "GET"} ${path} → ${res.status}`);
+    if (!res.ok) throw new Error(`${init?.method ?? "GET"} ${path} → ${res.status}`);
     return res.json() as Promise<T>;
   }
 
@@ -79,20 +67,6 @@ export class TabApi {
     const value = { format, data: await res.arrayBuffer() };
     this.tabContent.set(tab.id, value);
     return value;
-  }
-
-  // ---- Library: history and favorites synced across devices ----
-  library(): Promise<LibraryLists> {
-    return this.json("/v1/library");
-  }
-
-  /** Push changes (at most 500 per list); the reply is the merged lists. */
-  syncLibrary(changes: { history?: Change[]; favorites?: Change[] }): Promise<LibraryLists> {
-    return this.json("/v1/library/sync", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(changes),
-    });
   }
 
   // ---- Spotify fallback (tokens live on the server) ----

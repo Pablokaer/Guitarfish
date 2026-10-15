@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearCachedLookup, HttpError, TabApi, trackKey } from "../src/api";
+import { clearCachedLookup, TabApi, trackKey } from "../src/api";
 import type { LookupResponse, Song, TabInfo, Track } from "../src/types";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -190,35 +190,6 @@ describe("other endpoints", () => {
     expect((await api.tab(tab)).format).toBe("gp");
     fetchMock.mockResolvedValueOnce(new Response("", { status: 404 }));
     await expect(api.tab({ ...tab, id: 6 })).rejects.toThrow("tab 6 → 404");
-  });
-
-  it("reads the synced library", async () => {
-    const api = new TabApi(BASE);
-    const lists = { history: [], favorites: [] };
-    fetchMock.mockResolvedValueOnce(json(lists));
-    expect(await api.library()).toEqual(lists);
-    expect(urls()).toEqual([`${BASE}/v1/library`]);
-  });
-
-  it("posts library changes as JSON and returns the merged lists", async () => {
-    const api = new TabApi(BASE);
-    const merged = { history: [{ url: "u", songId: 1, title: "T", artist: "A", at: 5 }], favorites: [] };
-    fetchMock.mockResolvedValueOnce(json(merged));
-    const body = { favorites: [{ songId: 2, deletedAt: 9 }] };
-    expect(await api.syncLibrary(body)).toEqual(merged);
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe(`${BASE}/v1/library/sync`);
-    expect(init.method).toBe("POST");
-    expect(new Headers(init.headers).get("Content-Type")).toBe("application/json");
-    expect(JSON.parse(String(init.body))).toEqual(body);
-  });
-
-  it("reports the HTTP status of a failed request", async () => {
-    fetchMock.mockResolvedValueOnce(json({ error: "bad" }, 400));
-    const err = await new TabApi(BASE).syncLibrary({}).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(HttpError);
-    expect((err as HttpError).status).toBe(400);
-    expect(String(err)).toMatch(/POST \/v1\/library\/sync → 400/);
   });
 
   it("Spotify fallback endpoints", async () => {

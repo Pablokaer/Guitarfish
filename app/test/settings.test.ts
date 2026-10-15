@@ -17,12 +17,6 @@ describe("parseSettings", () => {
     expect(parseSettings({ version: 2, songsterrPanel: false }).songsterrPanel).toBe(false);
   });
 
-  it("syncs the library by default, and keeps a choice to turn it off", () => {
-    expect(parseSettings(null).librarySync).toBe(true);
-    expect(parseSettings({ version: 2 }).librarySync).toBe(true);
-    expect(parseSettings({ version: 2, librarySync: false }).librarySync).toBe(false);
-  });
-
   it("rejects unknown themes", () => {
     expect(parseSettings({ version: 2, theme: "neon" }).theme).toBe("graphite");
   });

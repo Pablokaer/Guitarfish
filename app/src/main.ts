@@ -16,8 +16,7 @@ import {
   type LayoutCommand,
   type LayoutState,
 } from "./layout";
-import { EntryStore, isSongPage, PickStore, toEntry, toResult, type TabEntry } from "./library";
-import { LibrarySync, syncHint } from "./librarysync";
+import { EntryStore, isSongPage, PickStore, pushHistory, toEntry, toggleFavorite, toResult, type TabEntry } from "./library";
 import { isConfidentMatch, songsterrQuery, songsterrSearchPage } from "./match";
 import { clampSpeed, clampTranspose, cursorSource, PracticeStore, SPEED_PRESETS } from "./practice";
 import { loadSettings, saveSettings } from "./settings";
@@ -139,8 +138,6 @@ const el = {
   layToolbar: $<HTMLInputElement>("lay-toolbar"),
   layFocus: $<HTMLInputElement>("lay-focus"),
   setServer: $<HTMLInputElement>("set-server"),
-  setLibrarySync: $<HTMLInputElement>("set-library-sync"),
-  librarySyncHint: $("library-sync-hint"),
   testBtn: $<HTMLButtonElement>("btn-test"),
 };
 
@@ -161,15 +158,6 @@ const viewer = new TabViewer(el.tab, el.local, settings.zoom);
 const history = new EntryStore("tabsync.history");
 const favorites = new EntryStore("tabsync.favorites");
 const picks = new PickStore();
-/** History and favorites synced with the tab server; the stores above are its offline cache. */
-const library = new LibrarySync({
-  api,
-  history,
-  favorites,
-  enabled: () => settings.librarySync,
-  onChange: () => renderLibrary(),
-  onStatus: (s) => (el.librarySyncHint.textContent = syncHint(s)),
-});
 const practice = new PracticeStore();
 /** Detector polling and the tab lookup for each new track; the UI below renders it. */
 const sync = new SyncController({
@@ -390,7 +378,7 @@ async function openSongsterr(r: SongsterrResult, how: "auto" | "manual") {
     saveSettings(settings);
     setView("tab");
   }
-  if (isSongPage(r)) library.open(toEntry(r));
+  if (isSongPage(r)) history.update((l) => pushHistory(l, toEntry(r)));
   // Same page already showing: nothing to load (keeps Songsterr's state).
   if (shown?.url === r.url && embed.isOpen) {
     renderAll();
@@ -453,16 +441,9 @@ function renderRecent() {
 
 function toggleFavoriteShown() {
   if (!shown || !isSongPage(shown)) return;
-  library.toggleFavorite(toEntry(shown!));
+  favorites.update((l) => toggleFavorite(l, toEntry(shown!)));
   renderToolbar();
   if (view === "favorites") renderEntryPage("favorites");
-}
-
-/** The lists changed from a sync: refresh every view that shows them. */
-function renderLibrary() {
-  renderRecent();
-  renderToolbar();
-  if (view === "history" || view === "favorites") renderEntryPage(view);
 }
 
 // ---- Status --------------------------------------------------------------------
@@ -985,7 +966,7 @@ function renderEntryPage(kind: "history" | "favorites") {
     clear.type = "button";
     clear.textContent = "Clear history";
     clear.onclick = () => {
-      library.clearHistory();
+      history.update(() => []);
       renderRecent();
       renderEntryPage("history");
     };
@@ -1018,7 +999,7 @@ function entryRow(e: TabEntry, kind: "history" | "favorites"): HTMLElement {
   star.setAttribute("aria-pressed", String(fav));
   star.innerHTML = icon(fav ? "starFilled" : "star", 16);
   star.onclick = () => {
-    library.toggleFavorite(e);
+    favorites.update((l) => toggleFavorite(l, { ...e, at: Date.now() }));
     renderEntryPage(kind);
     renderToolbar();
   };
@@ -1078,14 +1059,6 @@ function bindTools() {
     saveSettings(settings);
     sync.relookup(); // look the current song up again on the new server
     void refreshSpotifyStatus();
-    library.resetSeed(); // a new server starts with this device's full lists
-    void library.syncNow();
-  };
-  el.setLibrarySync.checked = settings.librarySync;
-  el.setLibrarySync.onchange = () => {
-    settings.librarySync = el.setLibrarySync.checked;
-    saveSettings(settings);
-    void library.syncNow(); // syncs, or shows "Sync off"
   };
   el.testBtn.onclick = async () => {
     try {
@@ -1305,7 +1278,6 @@ async function main() {
   if (!isTauri()) {
     showBanner("Running in a browser: device detection is off, only the Spotify Web API fallback works.");
   }
-  void library.start(window);
   await loadCapabilities();
   renderNowPlaying();
   await ensurePermission();
