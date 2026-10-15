@@ -1,5 +1,5 @@
 import * as alphaTab from "@coderline/alphatab";
-import { barAt, barStarts } from "./timeline";
+import { barAt, buildTimeline, type TimedBar } from "./timeline";
 import type { TabInfo } from "./types";
 
 /**
@@ -10,7 +10,7 @@ import type { TabInfo } from "./types";
  */
 export class TabViewer {
   private api: alphaTab.AlphaTabApi;
-  private barStartsMs: number[] = [];
+  private timeline: TimedBar[] = [];
   private currentBar = -1;
   private highlight: HTMLDivElement;
   private ready = false;
@@ -66,24 +66,28 @@ export class TabViewer {
   }
 
   clear(): void {
-    this.barStartsMs = [];
+    this.timeline = [];
     this.host.querySelectorAll(".at-surface").forEach((el) => ((el as HTMLElement).innerHTML = ""));
     this.highlight.hidden = true;
   }
 
-  /** Bar start times in ms, from time signatures and tempo automations. */
+  /** Bar start times in ms, from time signatures and each bar's first tempo automation. */
   private computeTimeline(score: alphaTab.model.Score): void {
-    this.barStartsMs = barStarts(
-      score.tempo,
-      score.masterBars.map((mb) => ({ ticks: mb.calculateDuration(), tempo: mb.tempoAutomations?.[0]?.value })),
-    );
+    let tick = 0;
+    const bars = score.masterBars.map((mb) => {
+      const startTick = tick;
+      tick += mb.calculateDuration();
+      return { index: mb.index, startTick, endTick: tick };
+    });
+    const tempos = score.masterBars.flatMap((mb, i) => (mb.tempoAutomations?.[0] ? [{ tick: bars[i].startTick, bpm: mb.tempoAutomations[0].value }] : []));
+    this.timeline = buildTimeline(bars, tempos, score.tempo);
     this.currentBar = -1;
   }
 
   /** Scroll to and highlight the bar playing at `positionMs`. */
   follow(positionMs: number): void {
-    if (!this.ready || this.barStartsMs.length === 0) return;
-    const bar = barAt(this.barStartsMs, positionMs);
+    if (!this.ready || this.timeline.length === 0) return;
+    const bar = barAt(this.timeline, positionMs);
     if (bar === this.currentBar) return;
     this.currentBar = bar;
 
