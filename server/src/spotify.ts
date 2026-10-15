@@ -51,6 +51,10 @@ interface Tokens {
 
 const TOKENS_KEY = "spotify.tokens";
 const pendingLogins = new Map<string, { verifier: string; createdAt: number }>();
+const LOGIN_TTL_MS = 600_000;
+
+/** The callback's state doesn't match a login started in the last 10 minutes. */
+export class LoginStateError extends Error {}
 
 function base64url(buf: Buffer): string {
   return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -59,7 +63,7 @@ function base64url(buf: Buffer): string {
 export function buildLoginUrl(cfg: SpotifyConfig): string {
   if (!cfg.clientId) throw new Error("SPOTIFY_CLIENT_ID is not set");
   // Drop stale login attempts (older than 10 minutes).
-  for (const [k, v] of pendingLogins) if (now(cfg) - v.createdAt > 600_000) pendingLogins.delete(k);
+  for (const [k, v] of pendingLogins) if (now(cfg) - v.createdAt > LOGIN_TTL_MS) pendingLogins.delete(k);
 
   const verifier = base64url(crypto.randomBytes(64));
   const challenge = base64url(crypto.createHash("sha256").update(verifier).digest());
@@ -98,8 +102,10 @@ async function tokenRequest(
 
 export async function handleCallback(db: Db, cfg: SpotifyConfig, code: string, state: string): Promise<void> {
   const pending = pendingLogins.get(state);
-  if (!pending) throw new Error("Unknown or expired login state. Start the login again.");
   pendingLogins.delete(state);
+  if (!pending || now(cfg) - pending.createdAt > LOGIN_TTL_MS) {
+    throw new LoginStateError("Unknown or expired login state. Start the login again.");
+  }
   const t = await tokenRequest(cfg, {
     grant_type: "authorization_code",
     code,

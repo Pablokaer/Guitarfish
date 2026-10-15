@@ -48,6 +48,9 @@ function songDto(db: Db, s: SongRow) {
 
 const FORMATS: TabFormat[] = ["alphatex", "gp", "musicxml"];
 
+const escapeHtml = (s: string) =>
+  s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+
 export function buildApp(opts: AppOptions): FastifyInstance {
   const { db } = opts;
   const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 20 * 1024 * 1024 });
@@ -189,9 +192,15 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     async (req, reply) => {
       const { code, state, error } = req.query;
       if (error || !code || !state) {
-        return reply.code(400).type("text/html").send(`<h3>Spotify login failed: ${error ?? "missing code"}</h3>`);
+        const reason = escapeHtml(error ?? "missing code");
+        return reply.code(400).type("text/html").send(`<h3>Spotify login failed: ${reason}</h3>`);
       }
-      await spotify.handleCallback(db, opts.spotify, code, state);
+      try {
+        await spotify.handleCallback(db, opts.spotify, code, state);
+      } catch (e) {
+        if (!(e instanceof spotify.LoginStateError)) throw e;
+        return reply.code(400).type("text/html").send(`<h3>Spotify login failed.</h3><p>${escapeHtml(e.message)}</p>`);
+      }
       return reply
         .type("text/html")
         .send("<h3>Spotify connected.</h3><p>You can close this tab and return to Guitarfish.</p>");
