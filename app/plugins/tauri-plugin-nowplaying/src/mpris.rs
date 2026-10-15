@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use crate::models::Track;
+use crate::models::{spotify_track_id, Track};
 
 /// The MPRIS metadata value types Spotify uses, without the D-Bus wrapper.
 #[derive(Debug, Clone, PartialEq)]
@@ -56,14 +56,73 @@ pub enum MprisCall {
 /// The bare Spotify track ID from an MPRIS `mpris:trackid`. Spotify used
 /// `spotify:track:<id>` (a string) and now uses `/com/spotify/track/<id>`
 /// (an object path). None for ads, episodes and anything else.
-pub fn spotify_id_from_trackid(_trackid: &str) -> Option<String> {
-    None
+pub fn spotify_id_from_trackid(trackid: &str) -> Option<String> {
+    trackid
+        .strip_prefix("/com/spotify/track/")
+        .filter(|id| !id.is_empty() && !id.contains('/'))
+        .map(str::to_string)
+        .or_else(|| spotify_track_id(trackid))
+}
+
+fn is_ad(trackid: &str) -> bool {
+    trackid.starts_with("spotify:ad:") || trackid.starts_with("/com/spotify/ad/")
+}
+
+fn str_of<'a>(meta: &'a Metadata, key: &str) -> Option<&'a str> {
+    match meta.get(key)? {
+        MetaValue::Str(s) => Some(s),
+        _ => None,
+    }
+}
+
+fn int_of(meta: &Metadata, key: &str) -> Option<i64> {
+    match meta.get(key)? {
+        MetaValue::Int(n) => Some(*n),
+        _ => None,
+    }
 }
 
 /// Maps Spotify's MPRIS state to a [`Track`]. None when stopped, during ads,
 /// or when there is no title.
-pub fn track_from_state(_state: &PlayerState) -> Option<Track> {
-    None
+pub fn track_from_state(state: &PlayerState) -> Option<Track> {
+    let meta = &state.metadata;
+    if state.status == "Stopped" {
+        return None;
+    }
+    let trackid = str_of(meta, "mpris:trackid").unwrap_or("");
+    if is_ad(trackid) {
+        return None;
+    }
+    let title = str_of(meta, "xesam:title").filter(|t| !t.is_empty())?;
+    let artist = match meta.get("xesam:artist") {
+        Some(MetaValue::StrList(list)) => {
+            list.iter().map(|a| a.trim()).filter(|a| !a.is_empty()).collect::<Vec<_>>().join(", ")
+        }
+        Some(MetaValue::Str(a)) => a.trim().to_string(),
+        _ => String::new(),
+    };
+    let duration_ms = int_of(meta, "mpris:length").filter(|&us| us > 0).map(|us| us as u64 / 1000);
+    let position_ms = state.position_us.map(|us| {
+        let ms = us.max(0) as u64 / 1000;
+        duration_ms.map_or(ms, |d| ms.min(d))
+    });
+    let artwork_url = str_of(meta, "mpris:artUrl")
+        .map(|u| u.replacen("https://open.spotify.com/image/", "https://i.scdn.co/image/", 1))
+        .filter(|u| u.starts_with("https://") || u.starts_with("http://"));
+
+    Some(Track {
+        title: title.to_string(),
+        artist,
+        album: str_of(meta, "xesam:album").filter(|a| !a.is_empty()).map(str::to_string),
+        duration_ms,
+        position_ms,
+        is_playing: state.status == "Playing",
+        spotify_id: spotify_id_from_trackid(trackid),
+        volume: state.volume.map(|v| (v * 100.0).round().clamp(0.0, 100.0) as u8),
+        artwork_url,
+        source: "os".into(),
+        player: "Spotify (Linux)".into(),
+    })
 }
 
 /// The MPRIS call for a `control` action (see `commands::control`). `track_id`
@@ -71,12 +130,27 @@ pub fn track_from_state(_state: &PlayerState) -> Option<Track> {
 /// uses `SetPosition` when the track ID is an object path, otherwise a relative
 /// `Seek` from the current position. None for unknown actions or missing values.
 pub fn control_call(
-    _action: &str,
-    _value: Option<f64>,
-    _track_id: Option<&str>,
-    _position_us: Option<i64>,
+    action: &str,
+    value: Option<f64>,
+    track_id: Option<&str>,
+    position_us: Option<i64>,
 ) -> Option<MprisCall> {
-    None
+    Some(match action {
+        "playpause" => MprisCall::PlayPause,
+        "next" => MprisCall::Next,
+        "previous" => MprisCall::Previous,
+        "seek" => {
+            let target_us = (value?.max(0.0) * 1000.0).round() as i64;
+            match track_id? {
+                id if id.starts_with('/') => {
+                    MprisCall::SetPosition { track_id: id.to_string(), position_us: target_us }
+                }
+                _ => MprisCall::Seek { offset_us: target_us - position_us? },
+            }
+        }
+        "volume" => MprisCall::SetVolume(value?.clamp(0.0, 100.0) / 100.0),
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
