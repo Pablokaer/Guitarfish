@@ -78,6 +78,7 @@
               <li><button class="nav-item" data-view="search" title="Search (⌘K)" aria-label="Search"><i data-icon="search"></i><span class="label">Search</span></button></li>
               <li><button class="nav-item" data-view="history" title="History" aria-label="History"><i data-icon="history"></i><span class="label">History</span></button></li>
               <li><button class="nav-item" data-view="favorites" title="Favorites" aria-label="Favorites"><i data-icon="star"></i><span class="label">Favorites</span></button></li>
+              <li><button class="nav-item" data-view="catalogue" title="My tabs" aria-label="My tabs"><i data-icon="layers"></i><span class="label">My tabs</span></button></li>
             </ul>
             <div class="nav-section label">Recent Tabs</div>
             <ul id="recent" class="recent"></ul>
@@ -153,8 +154,6 @@
               <p id="tools-status-detail" class="hint" hidden></p>
               <label class="switch-row"><span>Follow Spotify<small>Open the tab of each new song</small></span><input id="set-follow-spotify" type="checkbox" class="switch" /></label>
               <label class="switch-row"><span>Automatic tab search<small>Search Songsterr when the song changes</small></span><input id="set-auto-search" type="checkbox" class="switch" /></label>
-              <label class="switch-row"><span>Spotify Web API fallback<small>When this device sees nothing playing</small></span><input id="set-fallback" type="checkbox" class="switch" /></label>
-              <div class="kv"><span id="spotify-status" class="muted">Web API: unknown</span><button id="btn-spotify" class="btn small" type="button">Connect</button></div>
             </section>
 
             <section class="card">
@@ -165,6 +164,15 @@
                 <button id="btn-wrong" class="btn" type="button"><i data-icon="flag" data-size="14"></i>Wrong tab?</button>
                 <button id="btn-open-songsterr" class="btn" type="button" disabled><i data-icon="external" data-size="14"></i>Open in browser</button>
                 <button id="btn-fav-2" class="btn" type="button" disabled><i data-icon="star" data-size="14"></i><span>Save</span></button>
+              </div>
+            </section>
+
+            <section class="card">
+              <h3><i data-icon="upload" data-size="15"></i>My tabs</h3>
+              <p class="hint">Guitar Pro, alphaTex and MusicXML tabs you import. They stay on this device.</p>
+              <div class="btn-grid">
+                <button id="btn-import" class="btn" type="button"><i data-icon="upload" data-size="14"></i>Import tab…</button>
+                <button id="btn-my-tabs" class="btn" type="button"><i data-icon="layers" data-size="14"></i>Manage</button>
               </div>
             </section>
 
@@ -217,11 +225,6 @@
                   <option value="midnight">Midnight</option>
                 </select>
               </label>
-              <label class="field">Tab server
-                <input id="set-server" type="url" placeholder="http://127.0.0.1:8787" required />
-              </label>
-              <div class="kv"><small class="muted">On Android use your computer's LAN IP.</small><button id="btn-test" class="btn small" type="button">Test</button></div>
-              <label class="switch-row"><span>Sync history &amp; favorites<small id="library-sync-hint">Not synced yet</small></span><input id="set-library-sync" type="checkbox" class="switch" /></label>
             </section>
 
             <section class="card">

@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { TabApi } from "../src/api";
 import type { Track } from "../src/types";
 
 const core = vi.hoisted(() => ({ invoke: vi.fn(), isTauri: vi.fn(() => true) }));
@@ -9,14 +8,8 @@ const { Detector } = await import("../src/detector");
 
 const track = (title: string, extra: Partial<Track> = {}): Track => ({ title, artist: "Muse", isPlaying: true, source: "os", player: "Spotify", ...extra });
 
-function setup(opts: { fallback?: boolean; intervalMs?: number } = {}) {
-  let fallback = opts.fallback ?? true;
-  const api = { spotifyNowPlaying: vi.fn(async (): Promise<Track | null> => null) };
-  const detector = new Detector(api as unknown as TabApi, {
-    fallbackEnabled: () => fallback,
-    ...(opts.intervalMs ? { fallbackIntervalMs: opts.intervalMs } : {}),
-  });
-  return { detector, api, setFallback: (on: boolean) => (fallback = on) };
+function setup() {
+  return { detector: new Detector() };
 }
 
 /** Device reports `t` (null: nothing playing). */
@@ -24,129 +17,46 @@ const device = (t: Track | null) => core.invoke.mockResolvedValue({ track: t });
 
 beforeEach(() => {
   vi.useFakeTimers();
-  vi.setSystemTime(1_000_000);
   core.invoke.mockReset();
   core.isTauri.mockReturnValue(true);
 });
 afterEach(() => vi.useRealTimers());
 
 describe("read", () => {
-  it("prefers the device and does not call the fallback", async () => {
+  it("reads the track from the device", async () => {
     const s = setup();
     const t = track("Uprising");
     device(t);
     expect(await s.detector.read()).toEqual(t);
     expect(core.invoke).toHaveBeenCalledWith("plugin:nowplaying|get_now_playing");
-    expect(s.api.spotifyNowPlaying).not.toHaveBeenCalled();
     expect(s.detector.status).toEqual({ kind: "ok" });
   });
 
-  it("uses the Spotify Web API only when the device reports nothing", async () => {
-    const s = setup();
-    const t = track("Hysteria", { source: "spotify-api" });
-    device(null);
-    s.api.spotifyNowPlaying.mockResolvedValueOnce(t);
-    expect(await s.detector.read()).toEqual(t);
-    expect(s.api.spotifyNowPlaying).toHaveBeenCalledTimes(1);
-  });
-
   it("treats a missing track field as nothing playing", async () => {
-    const s = setup({ fallback: false });
+    const s = setup();
     core.invoke.mockResolvedValue({});
     expect(await s.detector.read()).toBeNull();
-  });
-
-  it("returns null without asking the server when the fallback is off", async () => {
-    const s = setup({ fallback: false });
     device(null);
     expect(await s.detector.read()).toBeNull();
-    expect(s.api.spotifyNowPlaying).not.toHaveBeenCalled();
   });
 
-  it("outside Tauri, skips the device and uses the fallback", async () => {
+  it("sees nothing outside Tauri", async () => {
     const s = setup();
     core.isTauri.mockReturnValue(false);
-    const t = track("Hysteria", { source: "spotify-api" });
-    s.api.spotifyNowPlaying.mockResolvedValueOnce(t);
-    expect(await s.detector.read()).toEqual(t);
+    expect(await s.detector.read()).toBeNull();
     expect(core.invoke).not.toHaveBeenCalled();
+    expect(s.detector.status).toEqual({ kind: "ok" });
   });
 
-  it("reports a device error and falls back", async () => {
+  it("reports a device error as nothing playing, until a read works again", async () => {
     const s = setup();
     core.invoke.mockRejectedValue("no player");
-    const t = track("Hysteria", { source: "spotify-api" });
-    s.api.spotifyNowPlaying.mockResolvedValueOnce(t);
-    expect(await s.detector.read()).toEqual(t);
+    expect(await s.detector.read()).toBeNull();
     expect(s.detector.status).toEqual({ kind: "error", message: "no player" });
 
     device(track("Uprising"));
     await s.detector.read();
     expect(s.detector.status).toEqual({ kind: "ok" });
-  });
-
-  it("treats a failing fallback as nothing playing", async () => {
-    const s = setup();
-    device(null);
-    s.api.spotifyNowPlaying.mockRejectedValueOnce(new Error("offline"));
-    expect(await s.detector.read()).toBeNull();
-  });
-});
-
-describe("fallback interval", () => {
-  it("asks the server at most every 3 s by default, extrapolating the position in between", async () => {
-    const s = setup();
-    device(null);
-    s.api.spotifyNowPlaying.mockResolvedValue(track("Hysteria", { source: "spotify-api", positionMs: 10_000 }));
-    expect((await s.detector.read())?.positionMs).toBe(10_000);
-
-    vi.advanceTimersByTime(1200);
-    expect((await s.detector.read())?.positionMs).toBe(11_200);
-    vi.advanceTimersByTime(1799);
-    expect((await s.detector.read())?.positionMs).toBe(12_999);
-    expect(s.api.spotifyNowPlaying).toHaveBeenCalledTimes(1);
-
-    vi.advanceTimersByTime(1);
-    expect((await s.detector.read())?.positionMs).toBe(10_000); // fresh reading from the server
-    expect(s.api.spotifyNowPlaying).toHaveBeenCalledTimes(2);
-  });
-
-  it("honours a custom interval", async () => {
-    const s = setup({ intervalMs: 500 });
-    device(null);
-    await s.detector.read();
-    vi.advanceTimersByTime(499);
-    await s.detector.read();
-    expect(s.api.spotifyNowPlaying).toHaveBeenCalledTimes(1);
-    vi.advanceTimersByTime(1);
-    await s.detector.read();
-    expect(s.api.spotifyNowPlaying).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not advance a paused track or one without a position", async () => {
-    const s = setup();
-    device(null);
-    const paused = track("Hysteria", { source: "spotify-api", positionMs: 10_000, isPlaying: false });
-    s.api.spotifyNowPlaying.mockResolvedValueOnce(paused);
-    await s.detector.read();
-    vi.advanceTimersByTime(1000);
-    expect(await s.detector.read()).toEqual(paused);
-
-    vi.advanceTimersByTime(2000);
-    const noPos = track("Uprising", { source: "spotify-api", positionMs: null });
-    s.api.spotifyNowPlaying.mockResolvedValueOnce(noPos);
-    await s.detector.read();
-    vi.advanceTimersByTime(1000);
-    expect(await s.detector.read()).toEqual(noPos);
-  });
-
-  it("keeps reporting nothing between calls when the server had nothing", async () => {
-    const s = setup();
-    device(null);
-    await s.detector.read();
-    vi.advanceTimersByTime(1000);
-    expect(await s.detector.read()).toBeNull();
-    expect(s.api.spotifyNowPlaying).toHaveBeenCalledTimes(1);
   });
 });
 

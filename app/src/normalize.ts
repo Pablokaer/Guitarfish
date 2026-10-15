@@ -1,6 +1,6 @@
 /**
- * Text normalization shared by the import pipeline and the lookup endpoint.
- * The same function MUST be used on both sides so stored keys and queries agree.
+ * Title and artist normalization for the on-device catalogue (see matching.ts).
+ * Imported songs and Spotify tracks go through the same functions, so their keys agree.
  */
 
 // Suffixes that streaming services append to titles but tab sites usually omit.

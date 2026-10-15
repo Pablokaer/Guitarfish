@@ -3,16 +3,18 @@ import { defineConfig, devices } from "@playwright/test";
 const PORT = Number(process.env.E2E_PORT ?? 4317);
 
 /**
- * End-to-end tests of the UI in a plain browser (no Tauri): the Guitarfish server
- * and Spotify are faked per test with page.route (see e2e/fixtures.ts).
- * Run `npm run build` first; the tests use `vite preview` of dist/.
+ * End-to-end tests of the built UI in Chromium, made to behave as inside Tauri:
+ * Tauri's IPC mocks (@tauri-apps/api/mocks) answer the now-playing plugin, the
+ * songsterr_search command and the webview calls, scripted per test (see
+ * e2e/fixtures.ts and e2e/tauri-mock.ts). The tab catalogue is the browser's real
+ * IndexedDB. Run `npm run build` first; the tests use `vite preview` of dist/.
  */
 export default defineConfig({
   testDir: "e2e",
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  // The Spotify Web API fallback is polled every 3 s, so a song change takes a few seconds.
+  // A song change shows at the next poll (every second); a failed Songsterr search is retried after 5 s.
   expect: { timeout: 10_000 },
   timeout: 45_000,
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : [["list"]],

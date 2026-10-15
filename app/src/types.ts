@@ -1,4 +1,4 @@
-/** What the detectors report. Same shape for the OS plugin and the Spotify fallback. */
+/** What the now-playing plugin reports about the Spotify app on this device. */
 export interface Track {
   title: string;
   artist: string;
@@ -10,20 +10,22 @@ export interface Track {
   /** Spotify volume 0–100 (macOS only). */
   volume?: number | null;
   artworkUrl?: string | null;
-  source: "os" | "spotify-api";
+  source: "os";
   player: string;
 }
 
+/** How a tab file is stored: alphaTab reads alphaTex as text, the others as bytes. */
+export type TabFormat = "alphatex" | "gp" | "musicxml";
+
+/** A tab file imported into the local catalogue (without its content). */
 export interface TabInfo {
   id: number;
-  instrument: string;
-  tuning: string | null;
-  format: "alphatex" | "gp" | "musicxml";
-  version: number;
-  rating: number | null;
-  isPlaceholder: boolean;
+  format: TabFormat;
+  /** The imported file's name, which tells several tabs of a song apart. */
+  name: string;
 }
 
+/** A song in the local catalogue, with its tabs. */
 export interface Song {
   id: number;
   title: string;

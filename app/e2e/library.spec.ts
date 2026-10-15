@@ -1,4 +1,4 @@
-import { expect, openApp, test } from "./fixtures";
+import { expect, openApp, test, WONDERWALL } from "./fixtures";
 import type { Page } from "@playwright/test";
 
 const now = Date.now();
@@ -10,10 +10,9 @@ const HISTORY = [
 const nav = (page: Page, name: string) => page.getByRole("navigation", { name: "Main" }).getByRole("button", { name, exact: true }).click();
 const rows = (page: Page) => page.locator("#page .rows .row-title");
 
-// In a browser the Songsterr page can't be embedded, so tabs are never opened
-// in-app; history is seeded as if they had been opened on the desktop app.
-test("history lists opened tabs, newest first, and can be cleared", async ({ page }) => {
-  await openApp(page, { "tabsync.history": HISTORY });
+// History and favorites live in localStorage only: seeded here as if the tabs had been opened before.
+test("history lists opened tabs, newest first, and can be cleared", async ({ page, tauri }) => {
+  await openApp(page, tauri, { "tabsync.history": HISTORY });
   await expect(page.locator("#recent .r-title")).toHaveText(["Wonderwall", "Champagne Supernova"]);
 
   await nav(page, "History");
@@ -28,8 +27,8 @@ test("history lists opened tabs, newest first, and can be cleared", async ({ pag
   await expect(page.locator("#recent")).toContainText("Tabs you open appear here.");
 });
 
-test("favorites: add from history, list, remove, and persist across reloads", async ({ page }) => {
-  await openApp(page, { "tabsync.history": HISTORY });
+test("favorites: add from history, list, remove, and persist across reloads", async ({ page, tauri }) => {
+  await openApp(page, tauri, { "tabsync.history": HISTORY });
   await nav(page, "Favorites");
   await expect(page.locator("#page")).toContainText("Save tabs with the star in the toolbar.");
 
@@ -52,4 +51,16 @@ test("favorites: add from history, list, remove, and persist across reloads", as
   await expect(page.locator("#page")).toContainText("Save tabs with the star in the toolbar.");
   await nav(page, "History");
   await expect(rows(page)).toHaveText(["Wonderwall", "Champagne Supernova"]);
+});
+
+test("opening a Songsterr page adds it to history, on this device", async ({ page, tauri }) => {
+  tauri.nowPlaying = WONDERWALL;
+  await openApp(page, tauri);
+  await expect(page.locator("#recent .r-title")).toHaveText(["Wonderwall"]);
+  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("tabsync.history") ?? "[]"));
+  expect(stored).toEqual([expect.objectContaining({ songId: 11, title: "Wonderwall", artist: "Oasis", url: "https://www.songsterr.com/a/wa/song?id=11" })]);
+
+  await page.getByRole("button", { name: "Save to favorites" }).first().click();
+  await nav(page, "Favorites");
+  await expect(rows(page)).toHaveText(["Wonderwall"]);
 });

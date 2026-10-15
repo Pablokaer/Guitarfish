@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeArtist, normalizeTitle, similarity, splitArtists } from "../src/normalize.js";
+import { normalizeArtist, normalizeTitle, similarity, splitArtists } from "../src/normalize";
 
 describe("normalizeTitle", () => {
   it.each([

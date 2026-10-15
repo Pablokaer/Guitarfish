@@ -227,19 +227,6 @@ jobs:
       - name: Generate the Android project
         working-directory: app
         run: npx tauri android init --ci
-      # The app talks to the Guitarfish server over plain HTTP on the LAN, which
-      # Android release builds block by default.
-      - name: Allow cleartext HTTP to the tab server
-        working-directory: app/src-tauri/gen/android
-        run: |
-          gradle=app/build.gradle.kts
-          manifest=app/src/main/AndroidManifest.xml
-          if grep -q 'usesCleartextTraffic"\] = "false"' "$gradle"; then
-            sed -i 's/usesCleartextTraffic"\] = "false"/usesCleartextTraffic"] = "true"/' "$gradle"
-          elif ! grep -q usesCleartextTraffic "$manifest"; then
-            sed -i 's/<application/<application android:usesCleartextTraffic="true"/' "$manifest"
-          fi
-          grep -n usesCleartextTraffic "$gradle" "$manifest" || true
       - name: Build the APK
         working-directory: app
         run: npx tauri android build --apk --ci

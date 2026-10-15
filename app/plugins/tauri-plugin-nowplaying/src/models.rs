@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// The currently playing track, as reported by the OS (or Spotify's Web API).
+/// The currently playing track, as reported by the OS.
 /// Field names are camelCase on the wire; the Kotlin side uses the same keys.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

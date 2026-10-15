@@ -1,5 +1,5 @@
-import { clearCachedLookup, type TabApi, trackKey } from "./api";
-import type { PickStore } from "./library";
+import type { Catalogue } from "./catalogue";
+import { type PickStore, trackKey } from "./library";
 import { isConfidentMatch, songsterrQuery, songsterrSearchPage } from "./match";
 import type { Settings } from "./settings";
 import type { SearchPhase } from "./status";
@@ -28,8 +28,6 @@ export interface SyncUi {
   status(): void;
   /** Follow Spotify: show this Songsterr page for the playing track (an "auto" open). */
   openSongsterr(r: SongsterrResult): void;
-  /** The tab server could not be reached (true), or answered again (false). */
-  serverUnreachable(down: boolean): void;
   /** Local catalogue match; `how` is e.g. "exact" or "fuzzy 87%". */
   localMatch(song: Song, how: string): Promise<void> | void;
   /** Not in the local catalogue: offer `candidates`. */
@@ -41,21 +39,22 @@ export interface SyncUi {
 
 export interface SyncDeps {
   detector: { read(): Promise<Track | null> };
-  api: Pick<TabApi, "lookup" | "songsterrSearch">;
+  /** The on-device tab catalogue. */
+  catalogue: Pick<Catalogue, "lookup">;
+  /** Songsterr's search (the app shell's songsterr_search command). */
+  songsterr: (query: string) => Promise<SongsterrResult[]>;
   picks: Pick<PickStore, "get" | "set">;
   /** Read on every use, so toggles apply immediately. */
   settings: Pick<Settings, "followSpotify" | "autoSearch">;
   ui: SyncUi;
   /** Clock for position extrapolation. Default: performance.now. */
   now?: () => number;
-  /** Drops the device's cached lookup for a track. Default: clearCachedLookup. */
-  forgetLookup?: (t: Track) => void;
 }
 
 /**
- * Follows the detector and finds the tab for each new track: Songsterr (via the
- * Guitarfish server) and the local catalogue, in parallel. Results that arrive after
- * the track changed are discarded (`seq`).
+ * Follows the detector and finds the tab for each new track: Songsterr's search and
+ * the on-device catalogue, in parallel. Results that arrive after the track changed
+ * are discarded (`seq`).
  */
 export class SyncController {
   private _current: Track | null = null; // last detector reading
@@ -70,11 +69,9 @@ export class SyncController {
   private interval: number | null = null; // poll interval, once started
   private timer: ReturnType<typeof setInterval> | null = null;
   private now: () => number;
-  private forgetLookup: (t: Track) => void;
 
   constructor(private deps: SyncDeps) {
     this.now = deps.now ?? (() => performance.now());
-    this.forgetLookup = deps.forgetLookup ?? clearCachedLookup;
   }
 
   get current(): Track | null {
@@ -164,7 +161,7 @@ export class SyncController {
     if (this.repoll) await this.poll();
   }
 
-  /** Look the playing track up again on the next poll (e.g. the server changed). */
+  /** Look the playing track up again on the next poll (e.g. a tab was imported or deleted). */
   relookup(): void {
     this.currentKey = null;
   }
@@ -174,12 +171,16 @@ export class SyncController {
     if (this._current) await this.searchSongsterrFor(this._current, this.seq);
   }
 
-  /** "Search again": forget the pick and cached lookup, then look up both sides. */
+  /** Look the playing track up in the catalogue again (a tab was imported or deleted). */
+  async refreshLocal(): Promise<void> {
+    if (this._current) await this.lookupLocal(this._current, this.seq);
+  }
+
+  /** "Search again": forget the pick, then look up both sides. */
   async searchAgain(): Promise<void> {
     const track = this._current;
     if (!track) return;
     this.deps.picks.set(trackKey(track), null);
-    this.forgetLookup(track);
     const seq = ++this.seq;
     await Promise.all([this.searchSongsterrFor(track, seq), this.lookupLocal(track, seq)]);
   }
@@ -224,27 +225,25 @@ export class SyncController {
   }
 
   private async searchSongsterrFor(track: Track, seq: number): Promise<void> {
-    const { api, settings, ui } = this.deps;
+    const { settings, ui } = this.deps;
     const query = songsterrQuery(track);
     this.setPhase("searching");
     let rs: SongsterrResult[];
     try {
-      rs = await api.songsterrSearch(query);
+      rs = await this.deps.songsterr(query);
     } catch (e) {
       if (seq !== this.seq) return;
       console.warn("songsterr search failed", e);
-      this.setPhase("server-error");
-      ui.serverUnreachable(true);
-      // Songsterr's own search page works without our server.
+      this.setPhase("offline");
+      // Songsterr's own search page, should its site answer when its API doesn't.
       this._best = songsterrSearchPage(query);
       if (settings.followSpotify) ui.openSongsterr(this._best);
       setTimeout(() => {
-        if (seq === this.seq && this._phase === "server-error") void this.searchSongsterrFor(track, seq);
+        if (seq === this.seq && this._phase === "offline") void this.searchSongsterrFor(track, seq);
       }, RETRY_MS);
       return;
     }
     if (seq !== this.seq) return;
-    ui.serverUnreachable(false);
     this._results = rs;
     const confident = rs.find((r) => isConfidentMatch(track, r)) ?? null;
     this._best = confident ?? rs[0] ?? songsterrSearchPage(query);
@@ -254,9 +253,9 @@ export class SyncController {
   }
 
   private async lookupLocal(track: Track, seq: number): Promise<void> {
-    const { api, ui } = this.deps;
+    const { catalogue, ui } = this.deps;
     try {
-      const r = await api.lookup(track);
+      const r = await catalogue.lookup(track);
       if (seq !== this.seq) return;
       if (r.match) {
         const how = r.method === "fuzzy" ? `fuzzy ${Math.round(r.confidence * 100)}%` : r.method;

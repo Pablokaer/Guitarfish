@@ -19,23 +19,6 @@ permissions:
   contents: read
 
 jobs:
-  server:
-    name: Server (typecheck + tests)
-    runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: server
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: server/package-lock.json
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm run coverage
-
   frontend:
     name: App frontend (typecheck + tests + build)
     runs-on: ubuntu-24.04
@@ -55,7 +38,8 @@ jobs:
 
   rust:
     # macOS runs the AppleScript parser tests; Windows compiles the SMTC code;
-    # Linux compiles the MPRIS (D-Bus) code. The MPRIS mapping tests run everywhere.
+    # Linux compiles the MPRIS (D-Bus) code. The MPRIS mapping tests and the app
+    # shell's tests (Songsterr search parsing) run everywhere.
     # Clippy also compiles both crates, so it replaces a separate `cargo check`.
     # The Android code is checked by rust-android below.
     name: Rust tests + clippy (${{ matrix.os }})
@@ -95,6 +79,9 @@ jobs:
           npm run build
       - name: Plugin tests
         run: cargo test --manifest-path app/plugins/tauri-plugin-nowplaying/Cargo.toml
+      - name: App shell tests
+        if: ${{ !cancelled() && steps.frontend.outcome == 'success' }}
+        run: cargo test --manifest-path app/src-tauri/Cargo.toml
       # Runs even when a test fails, so one push reports both.
       - name: Clippy
         if: ${{ !cancelled() && steps.frontend.outcome == 'success' }}
@@ -104,7 +91,8 @@ jobs:
 
   rust-android:
     # Compiles and lints the #[cfg(mobile)] code, which otherwise is only built by
-    # a release. `cargo clippy` doesn't link, so no NDK is needed.
+    # a release. `cargo clippy` doesn't link, but ring (the TLS crypto behind the
+    # Songsterr search) compiles C for the target, with the runner's Android NDK.
     name: Rust clippy (Android)
     runs-on: ubuntu-24.04
     steps:
@@ -128,13 +116,20 @@ jobs:
         run: |
           npm ci
           npm run build
+      - name: Use the runner's Android NDK for C code
+        run: |
+          ndk="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-}}"
+          [ -d "$ndk" ] || { echo "::error::No Android NDK found on this runner"; exit 1; }
+          bin="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          echo "CC_aarch64_linux_android=$bin/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=$bin/llvm-ar" >> "$GITHUB_ENV"
       - name: Clippy
         run: |
           cargo clippy --manifest-path app/plugins/tauri-plugin-nowplaying/Cargo.toml --target aarch64-linux-android --all-targets -- -D warnings
           cargo clippy --manifest-path app/src-tauri/Cargo.toml --target aarch64-linux-android --all-targets -- -D warnings
 
   e2e:
-    # Drives the built UI in Chromium against a fake server (app/e2e/fixtures.ts).
+    # Drives the built UI in Chromium with Tauri's IPC mocks (app/e2e/fixtures.ts).
     name: App E2E (Playwright)
     runs-on: ubuntu-24.04
     defaults:

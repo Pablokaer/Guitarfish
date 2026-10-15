@@ -1,3 +1,5 @@
+mod songsterr;
+
 /// Layout commands offered in the native menu. Their accelerators also work while
 /// the embedded Songsterr page has keyboard focus, which DOM key handlers in the
 /// main webview never see. The id after `layout:` is sent to the UI as-is.
@@ -38,6 +40,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_nowplaying::init())
+        .invoke_handler(tauri::generate_handler![songsterr::songsterr_search])
         .setup(|_app| {
             #[cfg(target_os = "macos")]
             layout_menu(_app)?;

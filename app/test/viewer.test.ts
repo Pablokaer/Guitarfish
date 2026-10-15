@@ -128,6 +128,39 @@ describe("TabViewer setup", () => {
     expect(scroller.scrollTop).toBe(0);
   });
 
+  it("draws a score loaded while hidden once it is shown", () => {
+    const { viewer, api, ready } = setup();
+    // Loaded behind the Songsterr view: alphaTab skips rendering at width 0.
+    viewer.load("alphatex", new TextEncoder().encode(". 1.1.1").buffer);
+    api.score = { tracks: [] };
+    api.scoreLoaded.fire(api.score);
+    viewer.whenShown();
+    expect(api.calls).toEqual(["tex:. 1.1.1", "render"]);
+    // Drawn: showing it again doesn't redraw.
+    ready(api.score);
+    viewer.whenShown();
+    expect(api.calls).toEqual(["tex:. 1.1.1", "render"]);
+    // A new score loads undrawn again.
+    viewer.load("gp", new Uint8Array(4).buffer);
+    viewer.whenShown();
+    expect(api.calls.slice(2)).toEqual(["load:4", "render"]);
+  });
+
+  it("doesn't draw a score cleared before it was shown", () => {
+    const { viewer, api } = setup();
+    viewer.load("alphatex", new TextEncoder().encode(". 1.1.1").buffer);
+    api.score = { tracks: [] };
+    viewer.clear();
+    viewer.whenShown();
+    expect(api.calls).not.toContain("render");
+  });
+
+  it("has nothing to draw when shown before any score", () => {
+    const { viewer, api } = setup();
+    viewer.whenShown();
+    expect(api.calls).toEqual([]);
+  });
+
   it("re-renders on zoom", () => {
     const { viewer, api } = setup();
     viewer.setZoom(0.8);

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { trackKey } from "../src/api";
+import { trackKey } from "../src/library";
 import { songsterrSearchPage } from "../src/match";
 import { EVENT_POLL_MS, POLL_MS, pollIntervalFor, RETRY_MS, SyncController, type SyncDeps, type SyncUi } from "../src/sync";
 import type { LookupResponse, Song, SongsterrResult, Track } from "../src/types";
@@ -54,37 +54,33 @@ function setup(over: Partial<SyncDeps> = {}) {
     trackChanged: vi.fn(),
     status: vi.fn(),
     openSongsterr: vi.fn(),
-    serverUnreachable: vi.fn(),
     localMatch: vi.fn(async () => {}),
     localMiss: vi.fn(),
     renderStage: vi.fn(),
     renderAll: vi.fn(),
   } satisfies SyncUi;
-  const api = {
-    lookup: vi.fn(async (): Promise<LookupResponse> => miss()),
-    songsterrSearch: vi.fn(async (q: string): Promise<SongsterrResult[]> => (q.includes("Uprising") ? [uprisingTab] : [])),
-  };
+  const catalogue = { lookup: vi.fn(async (): Promise<LookupResponse> => miss()) };
+  const songsterr = vi.fn(async (q: string): Promise<SongsterrResult[]> => (q.includes("Uprising") ? [uprisingTab] : []));
   const picks = memoryPicks();
   const settings = { followSpotify: true, autoSearch: true };
-  const forgetLookup = vi.fn();
   const deps: SyncDeps = {
     detector: { read: vi.fn(async () => reading) },
-    api,
+    catalogue,
+    songsterr,
     picks,
     settings,
     ui,
     now: () => clock,
-    forgetLookup,
     ...over,
   };
   const sync = new SyncController(deps);
   return {
     sync,
     ui,
-    api,
+    catalogue,
+    songsterr,
     picks,
     settings,
-    forgetLookup,
     detector: deps.detector,
     play: (t: Track | null) => (reading = t),
     tick: (ms: number) => (clock += ms),
@@ -109,8 +105,8 @@ describe("polling", () => {
     expect(s.ui.nowPlaying).toHaveBeenCalledWith(null);
     expect(s.ui.status).toHaveBeenCalled();
     expect(s.sync.current).toBeNull();
-    expect(s.api.songsterrSearch).not.toHaveBeenCalled();
-    expect(s.api.lookup).not.toHaveBeenCalled();
+    expect(s.songsterr).not.toHaveBeenCalled();
+    expect(s.catalogue.lookup).not.toHaveBeenCalled();
   });
 
   it("looks a track up only when its identity changes", async () => {
@@ -122,8 +118,8 @@ describe("polling", () => {
     await s.sync.poll();
     await flush();
     expect(s.ui.trackChanged).toHaveBeenCalledTimes(1);
-    expect(s.api.songsterrSearch).toHaveBeenCalledTimes(1);
-    expect(s.api.lookup).toHaveBeenCalledTimes(1);
+    expect(s.songsterr).toHaveBeenCalledTimes(1);
+    expect(s.catalogue.lookup).toHaveBeenCalledTimes(1);
     expect(s.sync.current?.positionMs).toBe(5000);
   });
 
@@ -226,13 +222,13 @@ describe("track change", () => {
   it("opens a confident Songsterr match automatically", async () => {
     const s = setup();
     const search = deferred<SongsterrResult[]>();
-    s.api.songsterrSearch.mockReturnValueOnce(search.promise);
+    s.songsterr.mockReturnValueOnce(search.promise);
     s.play(uprising);
     await s.sync.poll();
     expect(s.sync.phase).toBe("searching");
     search.resolve([uprisingTab]);
     await flush();
-    expect(s.api.songsterrSearch).toHaveBeenCalledWith("Muse Uprising");
+    expect(s.songsterr).toHaveBeenCalledWith("Muse Uprising");
     expect(s.sync.phase).toBe("found");
     expect(s.sync.best).toEqual(uprisingTab);
     expect(s.sync.results).toEqual([uprisingTab]);
@@ -246,7 +242,7 @@ describe("track change", () => {
     await s.sync.poll();
     await flush();
     const search = deferred<SongsterrResult[]>();
-    s.api.songsterrSearch.mockReturnValueOnce(search.promise);
+    s.songsterr.mockReturnValueOnce(search.promise);
     s.play(wonderwall);
     await s.sync.poll();
     expect(s.ui.trackChanged).toHaveBeenLastCalledWith(wonderwall);
@@ -257,18 +253,18 @@ describe("track change", () => {
 
   it("strips Spotify title noise from the query", async () => {
     const s = setup();
-    s.api.songsterrSearch.mockResolvedValueOnce([wonderwallTab]);
+    s.songsterr.mockResolvedValueOnce([wonderwallTab]);
     s.play(wonderwall);
     await s.sync.poll();
     await flush();
-    expect(s.api.songsterrSearch).toHaveBeenCalledWith("Oasis Wonderwall");
+    expect(s.songsterr).toHaveBeenCalledWith("Oasis Wonderwall");
     expect(s.sync.phase).toBe("found");
   });
 
   it("opens the closest result when none is a confident match", async () => {
     const s = setup();
     const other = result(9, "Something Else", "Someone");
-    s.api.songsterrSearch.mockResolvedValueOnce([other, uprisingTab]);
+    s.songsterr.mockResolvedValueOnce([other, uprisingTab]);
     s.play(wonderwall);
     await s.sync.poll();
     await flush();
@@ -280,7 +276,7 @@ describe("track change", () => {
   it("prefers a confident match over search order", async () => {
     const s = setup();
     const other = result(9, "Uprising Live Bootleg Mix", "Tribute Band");
-    s.api.songsterrSearch.mockResolvedValueOnce([other, uprisingTab]);
+    s.songsterr.mockResolvedValueOnce([other, uprisingTab]);
     s.play(uprising);
     await s.sync.poll();
     await flush();
@@ -316,8 +312,8 @@ describe("track change", () => {
     await s.sync.poll();
     await flush();
     expect(s.sync.phase).toBe("paused");
-    expect(s.api.songsterrSearch).not.toHaveBeenCalled();
-    expect(s.api.lookup).toHaveBeenCalledWith(uprising); // the local catalogue still looks
+    expect(s.songsterr).not.toHaveBeenCalled();
+    expect(s.catalogue.lookup).toHaveBeenCalledWith(uprising); // the local catalogue still looks
     await s.sync.searchCurrent();
     expect(s.sync.phase).toBe("found");
     expect(s.ui.openSongsterr).toHaveBeenCalledWith(uprisingTab);
@@ -326,7 +322,7 @@ describe("track change", () => {
   it("searchCurrent() does nothing without a track", async () => {
     const s = setup();
     await s.sync.searchCurrent();
-    expect(s.api.songsterrSearch).not.toHaveBeenCalled();
+    expect(s.songsterr).not.toHaveBeenCalled();
   });
 
   it("reports phase changes through status()", async () => {
@@ -345,10 +341,10 @@ describe("stale results", () => {
   it("discards a Songsterr result that arrives after the track changed", async () => {
     const s = setup();
     const slow = deferred<SongsterrResult[]>();
-    s.api.songsterrSearch.mockReturnValueOnce(slow.promise);
+    s.songsterr.mockReturnValueOnce(slow.promise);
     s.play(uprising);
     await s.sync.poll();
-    s.api.songsterrSearch.mockResolvedValueOnce([wonderwallTab]);
+    s.songsterr.mockResolvedValueOnce([wonderwallTab]);
     s.play(wonderwall);
     await s.sync.poll();
     await flush();
@@ -364,7 +360,7 @@ describe("stale results", () => {
   it("discards a stale Songsterr error (no banner, no retry)", async () => {
     const s = setup();
     const slow = deferred<SongsterrResult[]>();
-    s.api.songsterrSearch.mockReturnValueOnce(slow.promise);
+    s.songsterr.mockReturnValueOnce(slow.promise);
     s.play(uprising);
     await s.sync.poll();
     s.play(wonderwall);
@@ -372,15 +368,14 @@ describe("stale results", () => {
     await flush();
     slow.reject(new Error("offline"));
     await flush();
-    expect(s.ui.serverUnreachable).not.toHaveBeenCalledWith(true);
     await vi.advanceTimersByTimeAsync(RETRY_MS * 2);
-    expect(s.api.songsterrSearch).toHaveBeenCalledTimes(2);
+    expect(s.songsterr).toHaveBeenCalledTimes(2);
   });
 
   it("discards a local catalogue result that arrives after the track changed", async () => {
     const s = setup();
     const slow = deferred<LookupResponse>();
-    s.api.lookup.mockReturnValueOnce(slow.promise);
+    s.catalogue.lookup.mockReturnValueOnce(slow.promise);
     s.play(uprising);
     await s.sync.poll();
     s.play(wonderwall);
@@ -394,70 +389,68 @@ describe("stale results", () => {
   });
 });
 
-describe("server errors", () => {
-  it("shows Songsterr's search page and retries until the server answers", async () => {
+describe("Songsterr unreachable", () => {
+  it("shows Songsterr's search page and retries until Songsterr answers", async () => {
     const s = setup();
-    s.api.songsterrSearch.mockRejectedValueOnce(new Error("offline")).mockRejectedValueOnce(new Error("offline"));
+    s.songsterr.mockRejectedValueOnce(new Error("offline")).mockRejectedValueOnce(new Error("offline"));
     s.play(uprising);
     await s.sync.poll();
     await flush();
     const page = songsterrSearchPage("Muse Uprising");
-    expect(s.sync.phase).toBe("server-error");
-    expect(s.ui.serverUnreachable).toHaveBeenCalledWith(true);
+    expect(s.sync.phase).toBe("offline");
     expect(s.sync.best).toEqual(page);
     expect(s.ui.openSongsterr).toHaveBeenCalledWith(page);
 
     await vi.advanceTimersByTimeAsync(RETRY_MS - 1);
-    expect(s.api.songsterrSearch).toHaveBeenCalledTimes(1);
+    expect(s.songsterr).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
-    expect(s.api.songsterrSearch).toHaveBeenCalledTimes(2);
-    expect(s.sync.phase).toBe("server-error");
+    expect(s.songsterr).toHaveBeenCalledTimes(2);
+    expect(s.sync.phase).toBe("offline");
 
     await vi.advanceTimersByTimeAsync(RETRY_MS);
-    expect(s.api.songsterrSearch).toHaveBeenCalledTimes(3);
+    expect(s.songsterr).toHaveBeenCalledTimes(3);
     expect(s.sync.phase).toBe("found");
-    expect(s.ui.serverUnreachable).toHaveBeenLastCalledWith(false);
     expect(s.ui.openSongsterr).toHaveBeenLastCalledWith(uprisingTab);
 
     await vi.advanceTimersByTimeAsync(RETRY_MS * 3);
-    expect(s.api.songsterrSearch).toHaveBeenCalledTimes(3);
+    expect(s.songsterr).toHaveBeenCalledTimes(3);
   });
 
   it("does not open the search page with Follow Spotify off", async () => {
     const s = setup();
     s.settings.followSpotify = false;
-    s.api.songsterrSearch.mockRejectedValueOnce(new Error("offline"));
+    s.songsterr.mockRejectedValueOnce(new Error("offline"));
     s.play(uprising);
     await s.sync.poll();
     await flush();
-    expect(s.sync.phase).toBe("server-error");
+    expect(s.sync.phase).toBe("offline");
     expect(s.ui.openSongsterr).not.toHaveBeenCalled();
   });
 
   it("stops retrying once the track changed", async () => {
     const s = setup();
-    s.api.songsterrSearch.mockRejectedValueOnce(new Error("offline"));
+    s.songsterr.mockRejectedValueOnce(new Error("offline"));
     s.play(uprising);
     await s.sync.poll();
     await flush();
-    s.api.songsterrSearch.mockResolvedValueOnce([wonderwallTab]);
+    s.songsterr.mockResolvedValueOnce([wonderwallTab]);
     s.play(wonderwall);
     await s.sync.poll();
     await flush();
     await vi.advanceTimersByTimeAsync(RETRY_MS * 2);
-    expect(s.api.songsterrSearch).toHaveBeenCalledTimes(2);
-    expect(s.api.songsterrSearch).toHaveBeenLastCalledWith("Oasis Wonderwall");
+    expect(s.songsterr).toHaveBeenCalledTimes(2);
+    expect(s.songsterr).toHaveBeenLastCalledWith("Oasis Wonderwall");
   });
 
   it("stops retrying when the phase moved on (e.g. the user picked a tab)", async () => {
     const s = setup();
-    s.api.songsterrSearch.mockRejectedValueOnce(new Error("offline"));
+    s.songsterr.mockRejectedValueOnce(new Error("offline"));
     s.play(uprising);
     await s.sync.poll();
     await flush();
     s.sync.pick(uprising, uprisingTab);
     await vi.advanceTimersByTimeAsync(RETRY_MS * 2);
-    expect(s.api.songsterrSearch).toHaveBeenCalledTimes(1);
+    expect(s.songsterr).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -465,7 +458,7 @@ describe("local catalogue", () => {
   it("opens an exact match", async () => {
     const s = setup();
     const m = song(3, "Uprising", "Muse");
-    s.api.lookup.mockResolvedValueOnce({ match: m, confidence: 1, method: "exact", candidates: [m] });
+    s.catalogue.lookup.mockResolvedValueOnce({ match: m, confidence: 1, method: "exact", candidates: [m] });
     s.play(uprising);
     await s.sync.poll();
     await flush();
@@ -475,7 +468,7 @@ describe("local catalogue", () => {
   it("describes a fuzzy match with its score", async () => {
     const s = setup();
     const m = song(3, "Uprisin", "Muse");
-    s.api.lookup.mockResolvedValueOnce({ match: m, confidence: 0.874, method: "fuzzy", candidates: [m] });
+    s.catalogue.lookup.mockResolvedValueOnce({ match: m, confidence: 0.874, method: "fuzzy", candidates: [m] });
     s.play(uprising);
     await s.sync.poll();
     await flush();
@@ -485,7 +478,7 @@ describe("local catalogue", () => {
   it("offers candidates when there is no match", async () => {
     const s = setup();
     const c = [song(4, "Uprise", "Muse")];
-    s.api.lookup.mockResolvedValueOnce(miss(c));
+    s.catalogue.lookup.mockResolvedValueOnce(miss(c));
     s.play(uprising);
     await s.sync.poll();
     await flush();
@@ -494,23 +487,23 @@ describe("local catalogue", () => {
 
   it("retries a failed lookup every RETRY_MS while the track plays", async () => {
     const s = setup();
-    s.api.lookup.mockRejectedValueOnce(new Error("offline")).mockRejectedValueOnce(new Error("offline"));
+    s.catalogue.lookup.mockRejectedValueOnce(new Error("offline")).mockRejectedValueOnce(new Error("offline"));
     s.play(uprising);
     await s.sync.poll();
     await flush();
-    expect(s.api.lookup).toHaveBeenCalledTimes(1);
+    expect(s.catalogue.lookup).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(RETRY_MS);
-    expect(s.api.lookup).toHaveBeenCalledTimes(2);
+    expect(s.catalogue.lookup).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(RETRY_MS);
-    expect(s.api.lookup).toHaveBeenCalledTimes(3);
+    expect(s.catalogue.lookup).toHaveBeenCalledTimes(3);
     expect(s.ui.localMiss).toHaveBeenCalledWith(uprising, []);
     await vi.advanceTimersByTimeAsync(RETRY_MS * 3);
-    expect(s.api.lookup).toHaveBeenCalledTimes(3);
+    expect(s.catalogue.lookup).toHaveBeenCalledTimes(3);
   });
 
   it("stops retrying the lookup once the track changed", async () => {
     const s = setup();
-    s.api.lookup.mockRejectedValueOnce(new Error("offline"));
+    s.catalogue.lookup.mockRejectedValueOnce(new Error("offline"));
     s.play(uprising);
     await s.sync.poll();
     await flush();
@@ -518,7 +511,46 @@ describe("local catalogue", () => {
     await s.sync.poll();
     await flush();
     await vi.advanceTimersByTimeAsync(RETRY_MS * 2);
-    expect(s.api.lookup.mock.calls.map((c) => (c as unknown as [Track])[0].title)).toEqual(["Uprising", "Wonderwall - Remastered"]);
+    expect(s.catalogue.lookup.mock.calls.map((c) => (c as unknown as [Track])[0].title)).toEqual(["Uprising", "Wonderwall - Remastered"]);
+  });
+
+  it("refreshLocal() looks the playing track up again, leaving Songsterr alone", async () => {
+    const s = setup();
+    s.play(uprising);
+    await s.sync.poll();
+    await flush();
+    expect(s.ui.localMiss).toHaveBeenCalledTimes(1);
+    // A tab for it was just imported.
+    const m = song(5, "Uprising", "Muse");
+    s.catalogue.lookup.mockResolvedValueOnce({ match: m, confidence: 1, method: "external-id", candidates: [m] });
+    await s.sync.refreshLocal();
+    expect(s.catalogue.lookup).toHaveBeenCalledTimes(2);
+    expect(s.ui.localMatch).toHaveBeenCalledWith(m, "external-id");
+    expect(s.songsterr).toHaveBeenCalledTimes(1);
+    expect(s.ui.trackChanged).toHaveBeenCalledTimes(1);
+    expect(s.sync.phase).toBe("found");
+  });
+
+  it("refreshLocal() does nothing without a track", async () => {
+    const s = setup();
+    await s.sync.refreshLocal();
+    expect(s.catalogue.lookup).not.toHaveBeenCalled();
+  });
+
+  it("refreshLocal() drops its result when the track changed meanwhile", async () => {
+    const s = setup();
+    s.play(uprising);
+    await s.sync.poll();
+    await flush();
+    const late = deferred<LookupResponse>();
+    s.catalogue.lookup.mockReturnValueOnce(late.promise);
+    const refreshing = s.sync.refreshLocal();
+    s.play(wonderwall);
+    await s.sync.poll();
+    await flush();
+    late.resolve({ match: song(5, "Uprising", "Muse"), confidence: 1, method: "exact", candidates: [] });
+    await refreshing;
+    expect(s.ui.localMatch).not.toHaveBeenCalled();
   });
 });
 
@@ -533,8 +565,8 @@ describe("picks", () => {
     expect(s.sync.phase).toBe("picked");
     expect(s.sync.best).toEqual(pick);
     expect(s.ui.openSongsterr).toHaveBeenCalledWith(pick);
-    expect(s.api.songsterrSearch).not.toHaveBeenCalled();
-    expect(s.api.lookup).toHaveBeenCalled();
+    expect(s.songsterr).not.toHaveBeenCalled();
+    expect(s.catalogue.lookup).toHaveBeenCalled();
   });
 
   it("does not open the pick with Follow Spotify off", async () => {
@@ -569,7 +601,7 @@ describe("picks", () => {
     expect(s.sync.best).toEqual(uprisingTab);
   });
 
-  it("searchAgain() forgets the pick and the cached lookup, then searches both sides", async () => {
+  it("searchAgain() forgets the pick, then searches both sides", async () => {
     const s = setup();
     s.picks.set(trackKey(uprising), result(77, "Uprising (Acoustic)", "Muse"));
     s.play(uprising);
@@ -578,9 +610,8 @@ describe("picks", () => {
     await s.sync.searchAgain();
     await flush();
     expect(s.picks.get(trackKey(uprising))).toBeNull();
-    expect(s.forgetLookup).toHaveBeenCalledWith(uprising);
-    expect(s.api.songsterrSearch).toHaveBeenCalledTimes(1);
-    expect(s.api.lookup).toHaveBeenCalledTimes(2);
+    expect(s.songsterr).toHaveBeenCalledTimes(1);
+    expect(s.catalogue.lookup).toHaveBeenCalledTimes(2);
     expect(s.sync.phase).toBe("found");
     expect(s.sync.best).toEqual(uprisingTab);
   });
@@ -588,8 +619,7 @@ describe("picks", () => {
   it("searchAgain() does nothing without a track", async () => {
     const s = setup();
     await s.sync.searchAgain();
-    expect(s.forgetLookup).not.toHaveBeenCalled();
-    expect(s.api.lookup).not.toHaveBeenCalled();
+    expect(s.catalogue.lookup).not.toHaveBeenCalled();
   });
 });
 

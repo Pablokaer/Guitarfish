@@ -1,4 +1,10 @@
-import type { SongsterrResult } from "./types";
+import type { SongsterrResult, Track } from "./types";
+
+/** Stable identity of a track: the Spotify ID when known, else artist + title. */
+export function trackKey(t: Pick<Track, "title" | "artist" | "spotifyId">): string {
+  if (t.spotifyId) return `sp:${t.spotifyId}`;
+  return `at:${t.artist.toLowerCase().trim()}|${t.title.toLowerCase().trim()}`;
+}
 
 /** A Songsterr tab the user opened or saved. Only metadata and the link are kept. */
 export interface TabEntry {
@@ -8,22 +14,6 @@ export interface TabEntry {
   artist: string;
   /** Epoch ms of the last time it was opened (history) or saved (favorites). */
   at: number;
-}
-
-/** A tab removed from a list (unsaved, or history cleared), as synced to the server. */
-export interface Removal {
-  songId: number;
-  /** Epoch ms of the removal. */
-  deletedAt: number;
-}
-
-/** One change to a synced list: an entry added or bumped, or a removal. */
-export type Change = TabEntry | Removal;
-
-/** History and favorites as the server returns them, newest first. */
-export interface LibraryLists {
-  history: TabEntry[];
-  favorites: TabEntry[];
 }
 
 export const HISTORY_LIMIT = 50;
@@ -52,7 +42,7 @@ export function toggleFavorite(list: TabEntry[], entry: TabEntry): TabEntry[] {
     : [entry, ...list];
 }
 
-export function isEntry(v: unknown): v is TabEntry {
+function isEntry(v: unknown): v is TabEntry {
   const e = v as TabEntry;
   return !!e && typeof e.url === "string" && typeof e.songId === "number" && typeof e.title === "string" && typeof e.artist === "string" && typeof e.at === "number";
 }
