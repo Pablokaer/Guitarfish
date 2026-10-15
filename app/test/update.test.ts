@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { checkForUpdate, compareVersions, parseRelease, RELEASES_API } from "../src/update";
+import { checkForUpdate, checkNow, compareVersions, parseRelease, RELEASES_API } from "../src/update";
 
 function memoryStorage(init: Record<string, string> = {}) {
   const data = new Map(Object.entries(init));
@@ -85,5 +85,30 @@ describe("checkForUpdate", () => {
     expect(await checkForUpdate({ currentVersion: "0.3.0", fetchImpl: failing, storage })).toBeNull();
     expect(await checkForUpdate({ currentVersion: "0.3.0", fetchImpl: fetchReturning({}, false), storage })).toBeNull();
     expect(storage.data.size).toBe(0);
+  });
+});
+
+describe("checkNow", () => {
+  it("reports a newer release, even one already announced, and records it", async () => {
+    const storage = memoryStorage({ "tabsync.update.announced": "0.4.0" });
+    const result = await checkNow({ currentVersion: "0.3.0", fetchImpl: fetchReturning(releaseJson("v0.4.0")), storage });
+    expect(result).toEqual({ status: "available", update: parseRelease(releaseJson("v0.4.0")) });
+    // The periodic check stays quiet about it afterwards.
+    expect(await checkForUpdate({ currentVersion: "0.3.0", fetchImpl: fetchReturning(releaseJson("v0.4.0")), storage })).toBeNull();
+  });
+
+  it("says when the installed version is the latest", async () => {
+    const storage = memoryStorage();
+    expect(await checkNow({ currentVersion: "0.4.0", fetchImpl: fetchReturning(releaseJson("v0.4.0")), storage })).toEqual({ status: "current" });
+    expect(await checkNow({ currentVersion: "0.5.0", fetchImpl: fetchReturning(releaseJson("v0.4.0")), storage })).toEqual({ status: "current" });
+    expect(storage.data.size).toBe(0);
+  });
+
+  it("tells network and HTTP errors apart from up to date", async () => {
+    const failing = vi.fn(async () => {
+      throw new Error("offline");
+    });
+    expect(await checkNow({ currentVersion: "0.3.0", fetchImpl: failing, storage: memoryStorage() })).toEqual({ status: "error" });
+    expect(await checkNow({ currentVersion: "0.3.0", fetchImpl: fetchReturning({}, false), storage: memoryStorage() })).toEqual({ status: "error" });
   });
 });

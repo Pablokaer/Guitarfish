@@ -241,6 +241,10 @@ kbd { display: inline-block; min-width: 18px; padding: 1px 5px; border-radius: 4
 .recent .r-title { font-size: 12.5px; }
 .recent .r-artist { font-size: 11.5px; color: var(--muted); }
 .recent .r-empty { padding: 6px 10px; color: var(--faint); font-size: 12px; }
+.nav-actions { padding: 8px 0; border-top: 1px solid var(--border); }
+.nav-item:disabled { opacity: 0.6; cursor: progress; }
+.nav-item:disabled:hover { background: none; color: var(--muted); }
+.nav-actions:not([hidden]) + .nav-foot { border-top: 0; padding-top: 0; }
 .nav-foot { display: flex; justify-content: flex-end; padding-top: 8px; border-top: 1px solid var(--border); }
 .nav[data-state="compact"] .nav-foot { justify-content: center; }
 .nav[data-state="compact"] #btn-nav-compact .icon { transform: rotate(180deg); }

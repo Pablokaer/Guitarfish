@@ -1,7 +1,7 @@
 /**
  * Update check: compares the installed version with the latest published GitHub
- * release. Only notifies; downloading and installing is left to the user (the
- * release page has an installer for each platform).
+ * release, periodically (checkForUpdate) or when the user asks (checkNow).
+ * Installing is selfupdate.ts's job.
  */
 
 export const RELEASES_API = "https://api.github.com/repos/Pablokaer/Guitarfish/releases/latest";
@@ -39,6 +39,16 @@ export function parseRelease(raw: unknown): UpdateInfo | null {
   return { version, name: typeof r.name === "string" && r.name ? r.name : `Guitarfish ${version}`, url: r.html_url };
 }
 
+/** The latest release, or null when it isn't a usable one. Throws on network and HTTP errors. */
+async function fetchLatestRelease(fetchImpl: typeof fetch): Promise<UpdateInfo | null> {
+  const res = await fetchImpl(RELEASES_API, {
+    headers: { Accept: "application/vnd.github+json" },
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
+  return parseRelease(await res.json());
+}
+
 /**
  * Returns the latest release when it is newer than `currentVersion` and has not
  * been announced yet, and records it as announced. Errors count as "no update".
@@ -51,12 +61,7 @@ export async function checkForUpdate(opts: {
   const { currentVersion, fetchImpl = fetch, storage = localStorage } = opts;
   let release: UpdateInfo | null;
   try {
-    const res = await fetchImpl(RELEASES_API, {
-      headers: { Accept: "application/vnd.github+json" },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-    if (!res.ok) return null;
-    release = parseRelease(await res.json());
+    release = await fetchLatestRelease(fetchImpl);
   } catch {
     return null;
   }
@@ -68,4 +73,32 @@ export async function checkForUpdate(opts: {
     // Storage unavailable: announce anyway.
   }
   return release;
+}
+
+export type UpdateCheck = { status: "available"; update: UpdateInfo } | { status: "current" } | { status: "error" };
+
+/**
+ * The check the user asks for: always answers, even for a release already
+ * announced, and tells a failed check apart from "up to date". A newer release
+ * is recorded as announced, so the periodic check doesn't announce it again.
+ */
+export async function checkNow(opts: {
+  currentVersion: string;
+  fetchImpl?: typeof fetch;
+  storage?: Pick<Storage, "setItem">;
+}): Promise<UpdateCheck> {
+  const { currentVersion, fetchImpl = fetch, storage = localStorage } = opts;
+  let release: UpdateInfo | null;
+  try {
+    release = await fetchLatestRelease(fetchImpl);
+  } catch {
+    return { status: "error" };
+  }
+  if (!release || compareVersions(release.version, currentVersion) <= 0) return { status: "current" };
+  try {
+    storage.setItem(ANNOUNCED_KEY, release.version);
+  } catch {
+    // Storage unavailable: the periodic check may announce it once more.
+  }
+  return { status: "available", update: release };
 }
