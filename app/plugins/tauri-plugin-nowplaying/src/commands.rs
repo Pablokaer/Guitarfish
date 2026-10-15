@@ -23,17 +23,18 @@ pub(crate) async fn request_permission<R: Runtime>(app: AppHandle<R>) -> Result<
 /// Drives the player. `action`: "playpause" | "next" | "previous" | "seek"
 /// (`value` = position in ms) | "volume" (`value` = 0–100).
 #[command]
-pub(crate) async fn control<R: Runtime>(_app: AppHandle<R>, action: String, value: Option<f64>) -> Result<()> {
-    platform_control(action, value).await
+pub(crate) async fn control<R: Runtime>(app: AppHandle<R>, action: String, value: Option<f64>) -> Result<()> {
+    platform_control(app, action, value).await
 }
 
-/// Which controls `control` supports on this platform.
+/// Which controls `control` supports on this platform, and whether the plugin
+/// emits `nowplaying://changed` (`events`).
 #[command]
-pub(crate) async fn get_capabilities<R: Runtime>(_app: AppHandle<R>) -> Result<PlaybackCapabilities> {
-    Ok(platform_capabilities())
+pub(crate) async fn get_capabilities<R: Runtime>(app: AppHandle<R>) -> Result<PlaybackCapabilities> {
+    platform_capabilities(app)
 }
 
-// ---- Desktop: reads can block briefly (osascript / WinRT), so run them off the async pool.
+// ---- Desktop: reads can block briefly (osascript / WinRT / D-Bus), so run them off the async pool.
 #[cfg(desktop)]
 async fn platform_get<R: Runtime>(_app: AppHandle<R>) -> Result<NowPlayingResponse> {
     tauri::async_runtime::spawn_blocking(crate::desktop::read_now_playing)
@@ -53,15 +54,15 @@ fn platform_request<R: Runtime>(app: AppHandle<R>) -> Result<PermissionResponse>
 }
 
 #[cfg(desktop)]
-async fn platform_control(action: String, value: Option<f64>) -> Result<()> {
+async fn platform_control<R: Runtime>(_app: AppHandle<R>, action: String, value: Option<f64>) -> Result<()> {
     tauri::async_runtime::spawn_blocking(move || crate::desktop::control(&action, value))
         .await
         .map_err(|e| crate::Error::Detector(e.to_string()))?
 }
 
 #[cfg(desktop)]
-fn platform_capabilities() -> PlaybackCapabilities {
-    crate::desktop::capabilities()
+fn platform_capabilities<R: Runtime>(_app: AppHandle<R>) -> Result<PlaybackCapabilities> {
+    Ok(crate::desktop::capabilities())
 }
 
 // ---- Mobile: forward to the Kotlin plugin.
@@ -83,13 +84,15 @@ fn platform_request<R: Runtime>(app: AppHandle<R>) -> Result<PermissionResponse>
     app.now_playing().request_permission()
 }
 
-// Android's MediaController could do this, but the Kotlin side doesn't expose it yet.
+// Android: Spotify's MediaController.transportControls (transport and seek).
 #[cfg(mobile)]
-async fn platform_control(_action: String, _value: Option<f64>) -> Result<()> {
-    Err(crate::Error::Detector("playback control is not supported on this platform".into()))
+async fn platform_control<R: Runtime>(app: AppHandle<R>, action: String, value: Option<f64>) -> Result<()> {
+    use crate::NowPlayingExt;
+    app.now_playing().control(action, value)
 }
 
 #[cfg(mobile)]
-fn platform_capabilities() -> PlaybackCapabilities {
-    PlaybackCapabilities::default()
+fn platform_capabilities<R: Runtime>(app: AppHandle<R>) -> Result<PlaybackCapabilities> {
+    use crate::NowPlayingExt;
+    app.now_playing().get_capabilities()
 }

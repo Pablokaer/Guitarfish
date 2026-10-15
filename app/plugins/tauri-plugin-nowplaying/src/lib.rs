@@ -3,12 +3,18 @@
 //! * macOS   – asks the Spotify app via AppleScript (`osascript`).
 //! * Windows – Global System Media Transport Controls (SMTC), the API behind the
 //!   media overlay. Works for Spotify and other players.
+//! * Linux   – MPRIS over the D-Bus session bus (`org.mpris.MediaPlayer2.spotify`).
 //! * Android – `MediaSessionManager` through a `NotificationListenerService`
 //!   (Kotlin, see `android/`). The user grants notification access once.
 //!
 //! All platforms expose the same command: `plugin:nowplaying|get_now_playing`.
 //! `control` drives Spotify (play/pause, skip, seek, volume) where the OS allows
 //! it; `get_capabilities` tells the UI which of those controls to show.
+//!
+//! Where the OS announces changes (macOS: Spotify's distributed notification;
+//! Linux: MPRIS `PropertiesChanged`), the plugin also emits [`CHANGED_EVENT`] to the app, with no payload, and
+//! `get_capabilities` reports `events: true`. The UI should then call
+//! `get_now_playing` right away; polling stays as a fallback.
 
 use tauri::{
     plugin::{Builder, TauriPlugin},
@@ -18,6 +24,16 @@ use tauri::{
 mod commands;
 mod error;
 pub mod models;
+// Pure MPRIS mapping: used by the Linux detector, tested on every OS.
+#[cfg(any(
+    test,
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+))]
+mod mpris;
 
 #[cfg(desktop)]
 pub mod desktop;
@@ -25,6 +41,9 @@ pub mod desktop;
 mod mobile;
 
 pub use error::{Error, Result};
+
+/// App-wide event emitted when the player's track or state changes.
+pub const CHANGED_EVENT: &str = "nowplaying://changed";
 
 #[cfg(mobile)]
 pub use mobile::NowPlaying;
@@ -52,6 +71,8 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             commands::get_capabilities
         ])
         .setup(|_app, _api| {
+            #[cfg(desktop)]
+            desktop::start_events(_app);
             #[cfg(mobile)]
             {
                 use tauri::Manager;

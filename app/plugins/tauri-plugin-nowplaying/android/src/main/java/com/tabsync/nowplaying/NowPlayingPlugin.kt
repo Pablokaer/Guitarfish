@@ -11,12 +11,21 @@ import android.media.session.PlaybackState
 import android.os.SystemClock
 import android.provider.Settings
 import app.tauri.annotation.Command
+import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 
 private const val SPOTIFY_PACKAGE = "com.spotify.music"
+
+/** Arguments of `control`, the same shape as on desktop: `{ action, value }`. */
+@InvokeArg
+class ControlArgs {
+    /** "playpause" | "next" | "previous" | "seek" (value = position in ms). */
+    var action: String = ""
+    var value: Double? = null
+}
 
 @TauriPlugin
 class NowPlayingPlugin(private val activity: Activity) : Plugin(activity) {
@@ -64,15 +73,73 @@ class NowPlayingPlugin(private val activity: Activity) : Plugin(activity) {
             return
         }
         try {
-            val msm = activity.getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
-            val listener = ComponentName(activity, NowPlayingListenerService::class.java)
-            val controller = msm.getActiveSessions(listener)
-                .firstOrNull { it.packageName == SPOTIFY_PACKAGE }
-            controller?.let { toTrack(it) }?.let { ret.put("track", it) }
+            spotifyController()?.let { toTrack(it) }?.let { ret.put("track", it) }
         } catch (e: SecurityException) {
             // Access was revoked between the check and the call: report "nothing playing".
         }
         invoke.resolve(ret)
+    }
+
+    /**
+     * Same shape as desktop: { transport, seek, volume, events }. Transport and
+     * seek go through Spotify's MediaController, which needs notification access.
+     * Volume is the system's media stream, not Spotify's, so it isn't offered.
+     */
+    @Command
+    fun getCapabilities(invoke: Invoke) {
+        val granted = hasAccess()
+        val ret = JSObject()
+        ret.put("transport", granted)
+        ret.put("seek", granted)
+        ret.put("volume", false)
+        ret.put("events", false)
+        invoke.resolve(ret)
+    }
+
+    /** Drives Spotify through its media session. Rejects when Spotify has no session. */
+    @Command
+    fun control(invoke: Invoke) {
+        val args = invoke.parseArgs(ControlArgs::class.java)
+        if (!hasAccess()) {
+            invoke.reject("Notification access is needed to control Spotify")
+            return
+        }
+        val controller = try {
+            spotifyController()
+        } catch (e: SecurityException) {
+            null
+        }
+        if (controller == null) {
+            invoke.reject("Spotify is not playing")
+            return
+        }
+        val controls = controller.transportControls
+        when (args.action) {
+            "playpause" ->
+                if (controller.playbackState?.state == PlaybackState.STATE_PLAYING) controls.pause() else controls.play()
+            "next" -> controls.skipToNext()
+            "previous" -> controls.skipToPrevious()
+            "seek" -> {
+                val ms = args.value
+                if (ms == null) {
+                    invoke.reject("seek needs a value (position in ms)")
+                    return
+                }
+                controls.seekTo(ms.toLong().coerceAtLeast(0))
+            }
+            else -> {
+                invoke.reject("playback action \"${args.action}\" is not supported on this platform")
+                return
+            }
+        }
+        invoke.resolve()
+    }
+
+    /** Spotify's active media session, or null. Throws SecurityException without access. */
+    private fun spotifyController(): MediaController? {
+        val msm = activity.getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
+        val listener = ComponentName(activity, NowPlayingListenerService::class.java)
+        return msm.getActiveSessions(listener).firstOrNull { it.packageName == SPOTIFY_PACKAGE }
     }
 
     private fun toTrack(c: MediaController): JSObject? {
