@@ -14,7 +14,7 @@ export const EVENT_POLL_MS = 5000;
 export const RETRY_MS = 5000;
 
 /** How often to poll, given the detector's capabilities (unknown: plain polling). */
-export function pollIntervalFor(caps: Pick<PlaybackCapabilities, "events"> | null): number {
+export function pollIntervalFor(caps: Partial<Pick<PlaybackCapabilities, "events">> | null): number {
   return caps?.events === true ? EVENT_POLL_MS : POLL_MS;
 }
 
