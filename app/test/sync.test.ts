@@ -161,9 +161,12 @@ describe("polling", () => {
 describe("track change", () => {
   it("opens a confident Songsterr match automatically", async () => {
     const s = setup();
+    const search = deferred<SongsterrResult[]>();
+    s.api.songsterrSearch.mockReturnValueOnce(search.promise);
     s.play(uprising);
     await s.sync.poll();
     expect(s.sync.phase).toBe("searching");
+    search.resolve([uprisingTab]);
     await flush();
     expect(s.api.songsterrSearch).toHaveBeenCalledWith("Muse Uprising");
     expect(s.sync.phase).toBe("found");
