@@ -11,3 +11,5 @@ app/public/font/
 app/public/soundfont/
 .env
 .idea/
+app/test-results/
+app/playwright-report/
