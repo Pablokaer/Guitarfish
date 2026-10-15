@@ -315,8 +315,8 @@ kbd { display: inline-block; min-width: 18px; padding: 1px 5px; border-radius: 4
 .row { width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 14px; text-align: left; transition: background var(--t) var(--ease); }
 .row:hover { background: var(--hover); }
 .row-main { flex: 1; min-width: 0; }
-.row-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.row-sub { margin-top: 2px; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row-title { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row-sub { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row-meta { flex: none; color: var(--faint); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .row-meta.score { color: var(--accent); }
 .row-wrap { display: flex; align-items: center; }
