@@ -349,6 +349,7 @@ function renderStage() {
   }
   el.sourceSwitch.hidden = !(embed && currentSong);
   el.sourceSwitch.querySelectorAll<HTMLButtonElement>("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.source === src)));
+  if (!el.local.hidden) viewer.whenShown();
   el.localCard.hidden = src !== "local" || !currentSong;
   if (el.localCard.hidden) viewer.stop();
   renderToolbar();

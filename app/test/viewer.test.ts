@@ -146,6 +146,15 @@ describe("TabViewer setup", () => {
     expect(api.calls.slice(2)).toEqual(["load:4", "render"]);
   });
 
+  it("doesn't draw a score cleared before it was shown", () => {
+    const { viewer, api } = setup();
+    viewer.load("alphatex", new TextEncoder().encode(". 1.1.1").buffer);
+    api.score = { tracks: [] };
+    viewer.clear();
+    viewer.whenShown();
+    expect(api.calls).not.toContain("render");
+  });
+
   it("has nothing to draw when shown before any score", () => {
     const { viewer, api } = setup();
     viewer.whenShown();

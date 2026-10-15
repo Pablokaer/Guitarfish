@@ -28,6 +28,8 @@ export class TabViewer {
   private playerOn = false;
   private playWhenReady = false;
   private status: PlayerStatus = { state: "stopped", loading: false };
+  /** A score was loaded but not drawn yet (alphaTab skips drawing while the view is hidden). */
+  private undrawn = false;
 
   /** Called when the built-in player starts, pauses, stops or finishes loading. */
   onPlayer: (status: PlayerStatus) => void = () => {};
@@ -74,6 +76,7 @@ export class TabViewer {
     });
     this.api.postRenderFinished.on(() => {
       this.ready = true;
+      this.undrawn = false;
       // alphaTab rebuilds its DOM on render; re-attach our overlay.
       if (!this.highlight.isConnected) this.host.appendChild(this.highlight);
       this.currentBar = -1;
@@ -101,6 +104,7 @@ export class TabViewer {
   load(format: TabInfo["format"], data: ArrayBuffer): void {
     this.stop();
     this.scroller.scrollTop = 0;
+    this.undrawn = true;
     if (format === "alphatex") {
       this.api.tex(new TextDecoder().decode(data));
     } else {
@@ -115,7 +119,17 @@ export class TabViewer {
     this.api.render();
   }
 
+  /**
+   * The viewer became visible. alphaTab skips rendering into a hidden (zero-width)
+   * container and only waits for its very first appearance, so a score loaded
+   * behind the Songsterr view is drawn here.
+   */
+  whenShown(): void {
+    if (this.undrawn && this.api.score) this.api.render();
+  }
+
   clear(): void {
+    this.undrawn = false;
     this.stop();
     this.timeline = [];
     this.host.querySelectorAll(".at-surface").forEach((el) => ((el as HTMLElement).innerHTML = ""));
