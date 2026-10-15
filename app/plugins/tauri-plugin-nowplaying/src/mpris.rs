@@ -1,0 +1,308 @@
+//! MPRIS (Linux) logic that doesn't touch D-Bus: Spotify's `Metadata` map to a
+//! [`Track`], and a control action to the MPRIS call that performs it. It has no
+//! D-Bus types, so its tests run on every OS; `desktop/linux.rs` converts the
+//! D-Bus values into [`MetaValue`]s and sends the calls.
+
+use std::collections::HashMap;
+
+use crate::models::Track;
+
+/// The MPRIS metadata value types Spotify uses, without the D-Bus wrapper.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MetaValue {
+    /// Strings and object paths (`mpris:trackid` is an object path in newer Spotify builds).
+    Str(String),
+    /// String arrays, e.g. `xesam:artist`.
+    StrList(Vec<String>),
+    /// Any integer, e.g. `mpris:length` (µs; Spotify sends it unsigned, the spec says signed).
+    Int(i64),
+    Float(f64),
+}
+
+/// The `Metadata` property of `org.mpris.MediaPlayer2.Player`.
+pub type Metadata = HashMap<String, MetaValue>;
+
+/// The player properties a read needs.
+#[derive(Debug, Clone, Default)]
+pub struct PlayerState {
+    pub metadata: Metadata,
+    /// `PlaybackStatus`: "Playing", "Paused" or "Stopped".
+    pub status: String,
+    /// `Position`, in µs.
+    pub position_us: Option<i64>,
+    /// `Volume`, 0.0–1.0.
+    pub volume: Option<f64>,
+}
+
+/// One MPRIS call on `org.mpris.MediaPlayer2.Player`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MprisCall {
+    PlayPause,
+    Next,
+    Previous,
+    /// `SetPosition(o TrackId, x Position)`; the position is absolute, in µs.
+    SetPosition {
+        track_id: String,
+        position_us: i64,
+    },
+    /// `Seek(x Offset)`, relative, in µs.
+    Seek {
+        offset_us: i64,
+    },
+    /// Set the `Volume` property (0.0–1.0).
+    SetVolume(f64),
+}
+
+/// The bare Spotify track ID from an MPRIS `mpris:trackid`. Spotify used
+/// `spotify:track:<id>` (a string) and now uses `/com/spotify/track/<id>`
+/// (an object path). None for ads, episodes and anything else.
+pub fn spotify_id_from_trackid(_trackid: &str) -> Option<String> {
+    None
+}
+
+/// Maps Spotify's MPRIS state to a [`Track`]. None when stopped, during ads,
+/// or when there is no title.
+pub fn track_from_state(_state: &PlayerState) -> Option<Track> {
+    None
+}
+
+/// The MPRIS call for a `control` action (see `commands::control`). `track_id`
+/// and `position_us` are the current `mpris:trackid` and `Position`: seeking
+/// uses `SetPosition` when the track ID is an object path, otherwise a relative
+/// `Seek` from the current position. None for unknown actions or missing values.
+pub fn control_call(
+    _action: &str,
+    _value: Option<f64>,
+    _track_id: Option<&str>,
+    _position_us: Option<i64>,
+) -> Option<MprisCall> {
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn s(v: &str) -> MetaValue {
+        MetaValue::Str(v.into())
+    }
+
+    fn spotify_state() -> PlayerState {
+        let metadata: Metadata = [
+            ("mpris:trackid", s("/com/spotify/track/4uLU6hMCjMI75M1A2tKUQC")),
+            ("xesam:title", s("Never Gonna Give You Up")),
+            ("xesam:artist", MetaValue::StrList(vec!["Rick Astley".into()])),
+            ("xesam:album", s("Whenever You Need Somebody")),
+            ("mpris:length", MetaValue::Int(213_573_000)),
+            ("mpris:artUrl", s("https://i.scdn.co/image/ab67616d0000b273")),
+            ("xesam:trackNumber", MetaValue::Int(1)),
+            ("xesam:autoRating", MetaValue::Float(0.8)),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        PlayerState { metadata, status: "Playing".into(), position_us: Some(61_500_000), volume: Some(0.64) }
+    }
+
+    #[test]
+    fn trackid_object_path() {
+        assert_eq!(
+            spotify_id_from_trackid("/com/spotify/track/4uLU6hMCjMI75M1A2tKUQC").as_deref(),
+            Some("4uLU6hMCjMI75M1A2tKUQC")
+        );
+    }
+
+    #[test]
+    fn trackid_uri() {
+        assert_eq!(spotify_id_from_trackid("spotify:track:abc").as_deref(), Some("abc"));
+    }
+
+    #[test]
+    fn trackid_rejects_other_kinds() {
+        for id in [
+            "/com/spotify/ad/123",
+            "spotify:ad:123",
+            "/com/spotify/episode/xyz",
+            "spotify:episode:xyz",
+            "/com/spotify/track/",
+            "spotify:track:",
+            "/org/mpris/MediaPlayer2/TrackList/NoTrack",
+            "",
+        ] {
+            assert_eq!(spotify_id_from_trackid(id), None, "{id}");
+        }
+    }
+
+    #[test]
+    fn maps_spotify_metadata() {
+        let t = track_from_state(&spotify_state()).unwrap();
+        assert_eq!(t.title, "Never Gonna Give You Up");
+        assert_eq!(t.artist, "Rick Astley");
+        assert_eq!(t.album.as_deref(), Some("Whenever You Need Somebody"));
+        assert_eq!(t.duration_ms, Some(213_573));
+        assert_eq!(t.position_ms, Some(61_500));
+        assert!(t.is_playing);
+        assert_eq!(t.spotify_id.as_deref(), Some("4uLU6hMCjMI75M1A2tKUQC"));
+        assert_eq!(t.volume, Some(64));
+        assert_eq!(t.artwork_url.as_deref(), Some("https://i.scdn.co/image/ab67616d0000b273"));
+        assert_eq!(t.source, "os");
+        assert_eq!(t.player, "Spotify (Linux)");
+    }
+
+    #[test]
+    fn joins_several_artists() {
+        let mut st = spotify_state();
+        st.metadata
+            .insert("xesam:artist".into(), MetaValue::StrList(vec!["Daft Punk".into(), "Pharrell Williams".into()]));
+        assert_eq!(track_from_state(&st).unwrap().artist, "Daft Punk, Pharrell Williams");
+    }
+
+    #[test]
+    fn accepts_a_plain_string_artist() {
+        let mut st = spotify_state();
+        st.metadata.insert("xesam:artist".into(), s("Rick Astley"));
+        assert_eq!(track_from_state(&st).unwrap().artist, "Rick Astley");
+    }
+
+    #[test]
+    fn paused_is_not_playing() {
+        let mut st = spotify_state();
+        st.status = "Paused".into();
+        assert!(!track_from_state(&st).unwrap().is_playing);
+    }
+
+    #[test]
+    fn stopped_reports_nothing() {
+        let mut st = spotify_state();
+        st.status = "Stopped".into();
+        assert!(track_from_state(&st).is_none());
+    }
+
+    #[test]
+    fn ads_report_nothing() {
+        let mut st = spotify_state();
+        st.metadata.insert("mpris:trackid".into(), s("/com/spotify/ad/123"));
+        assert!(track_from_state(&st).is_none());
+        st.metadata.insert("mpris:trackid".into(), s("spotify:ad:123"));
+        assert!(track_from_state(&st).is_none());
+    }
+
+    #[test]
+    fn missing_title_reports_nothing() {
+        let mut st = spotify_state();
+        st.metadata.insert("xesam:title".into(), s(""));
+        assert!(track_from_state(&st).is_none());
+        st.metadata.remove("xesam:title");
+        assert!(track_from_state(&st).is_none());
+    }
+
+    #[test]
+    fn episodes_have_no_spotify_id() {
+        let mut st = spotify_state();
+        st.metadata.insert("mpris:trackid".into(), s("/com/spotify/episode/xyz"));
+        let t = track_from_state(&st).unwrap();
+        assert_eq!(t.spotify_id, None);
+    }
+
+    #[test]
+    fn missing_optional_fields() {
+        let mut st = spotify_state();
+        for k in ["xesam:album", "mpris:length", "mpris:artUrl", "xesam:artist"] {
+            st.metadata.remove(k);
+        }
+        st.position_us = None;
+        st.volume = None;
+        let t = track_from_state(&st).unwrap();
+        assert_eq!(t.artist, "");
+        assert_eq!(t.album, None);
+        assert_eq!(t.duration_ms, None);
+        assert_eq!(t.position_ms, None);
+        assert_eq!(t.volume, None);
+        assert_eq!(t.artwork_url, None);
+    }
+
+    #[test]
+    fn clamps_position_and_volume() {
+        let mut st = spotify_state();
+        st.position_us = Some(999_000_000_000);
+        st.volume = Some(1.7);
+        let t = track_from_state(&st).unwrap();
+        assert_eq!(t.position_ms, Some(213_573));
+        assert_eq!(t.volume, Some(100));
+
+        st.position_us = Some(-5);
+        st.volume = Some(-0.2);
+        let t = track_from_state(&st).unwrap();
+        assert_eq!(t.position_ms, Some(0));
+        assert_eq!(t.volume, Some(0));
+    }
+
+    #[test]
+    fn zero_length_is_unknown() {
+        let mut st = spotify_state();
+        st.metadata.insert("mpris:length".into(), MetaValue::Int(0));
+        assert_eq!(track_from_state(&st).unwrap().duration_ms, None);
+    }
+
+    #[test]
+    fn rewrites_old_spotify_artwork_host() {
+        // Older Spotify builds report a host that no longer serves the images.
+        let mut st = spotify_state();
+        st.metadata.insert("mpris:artUrl".into(), s("https://open.spotify.com/image/ab67616d0000b273"));
+        assert_eq!(
+            track_from_state(&st).unwrap().artwork_url.as_deref(),
+            Some("https://i.scdn.co/image/ab67616d0000b273")
+        );
+    }
+
+    #[test]
+    fn ignores_non_http_artwork() {
+        let mut st = spotify_state();
+        st.metadata.insert("mpris:artUrl".into(), s("file:///tmp/cover.png"));
+        assert_eq!(track_from_state(&st).unwrap().artwork_url, None);
+    }
+
+    #[test]
+    fn transport_calls() {
+        assert_eq!(control_call("playpause", None, None, None), Some(MprisCall::PlayPause));
+        assert_eq!(control_call("next", None, None, None), Some(MprisCall::Next));
+        assert_eq!(control_call("previous", None, None, None), Some(MprisCall::Previous));
+        assert_eq!(control_call("shuffle", None, None, None), None);
+    }
+
+    #[test]
+    fn seek_with_an_object_path_uses_set_position() {
+        assert_eq!(
+            control_call("seek", Some(61_500.0), Some("/com/spotify/track/abc"), Some(0)),
+            Some(MprisCall::SetPosition { track_id: "/com/spotify/track/abc".into(), position_us: 61_500_000 })
+        );
+        assert_eq!(
+            control_call("seek", Some(-10.0), Some("/com/spotify/track/abc"), None),
+            Some(MprisCall::SetPosition { track_id: "/com/spotify/track/abc".into(), position_us: 0 })
+        );
+    }
+
+    #[test]
+    fn seek_with_a_uri_track_id_is_relative() {
+        assert_eq!(
+            control_call("seek", Some(61_500.0), Some("spotify:track:abc"), Some(70_000_000)),
+            Some(MprisCall::Seek { offset_us: -8_500_000 })
+        );
+        // Without a position there is nothing to seek from.
+        assert_eq!(control_call("seek", Some(61_500.0), Some("spotify:track:abc"), None), None);
+        assert_eq!(control_call("seek", Some(61_500.0), None, None), None);
+    }
+
+    #[test]
+    fn seek_needs_a_value() {
+        assert_eq!(control_call("seek", None, Some("/com/spotify/track/abc"), Some(0)), None);
+    }
+
+    #[test]
+    fn volume_is_scaled_and_clamped() {
+        assert_eq!(control_call("volume", Some(64.0), None, None), Some(MprisCall::SetVolume(0.64)));
+        assert_eq!(control_call("volume", Some(140.0), None, None), Some(MprisCall::SetVolume(1.0)));
+        assert_eq!(control_call("volume", Some(-3.0), None, None), Some(MprisCall::SetVolume(0.0)));
+        assert_eq!(control_call("volume", None, None, None), None);
+    }
+}

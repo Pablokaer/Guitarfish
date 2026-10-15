@@ -18,6 +18,16 @@ use tauri::{
 mod commands;
 mod error;
 pub mod models;
+// Pure MPRIS mapping: used by the Linux detector, tested on every OS.
+#[cfg(any(
+    test,
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+))]
+mod mpris;
 
 #[cfg(desktop)]
 pub mod desktop;
