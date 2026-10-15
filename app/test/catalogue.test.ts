@@ -98,3 +98,88 @@ describe("catalogue storage", () => {
     await expect(Catalogue.open(broken)).rejects.toThrow("blocked");
   });
 });
+
+describe("catalogue lookup", () => {
+  const track = (title: string, artist: string, spotifyId: string | null = null, durationMs: number | null = null) => ({ title, artist, spotifyId, durationMs });
+
+  async function seeded() {
+    const c = await fresh();
+    const wonderwall = (await c.addTab(tab("Wonderwall", "Oasis", { durationMs: 258_000 }))).song;
+    const seven = (await c.addTab(tab("Seven Nation Army", "The White Stripes"))).song;
+    const tempo = (await c.addTab(tab("Tempo Perdido", "Legião Urbana"))).song;
+    return { c, wonderwall, seven, tempo };
+  }
+
+  it("finds an exact match despite Spotify's title noise, with its tabs", async () => {
+    const { c, wonderwall } = await seeded();
+    expect(await c.lookup(track("Wonderwall - Remastered", "Oasis"))).toEqual({
+      match: wonderwall,
+      confidence: 0.97,
+      method: "exact",
+      candidates: [{ ...wonderwall, score: 0.97 }],
+    });
+  });
+
+  it("finds a close match by similarity", async () => {
+    const { c, wonderwall } = await seeded();
+    const r = await c.lookup(track("Wonderwal", "Oasis", null, 258_500));
+    expect(r.method).toBe("fuzzy");
+    expect(r.match).toEqual(wonderwall);
+    expect(r.candidates[0]).toEqual({ ...wonderwall, score: r.confidence });
+  });
+
+  it("offers scored candidates when unsure", async () => {
+    const { c, wonderwall } = await seeded();
+    const r = await c.lookup(track("Wonder", "Unknown Band"));
+    expect(r.match).toBeNull();
+    expect(r.method).toBe("none");
+    expect(r.candidates.map((s) => s.id)).toContain(wonderwall.id);
+    expect(r.candidates.every((s) => typeof s.score === "number" && s.tabs.length === 1)).toBe(true);
+  });
+
+  it("finds nothing in an empty catalogue", async () => {
+    const c = await fresh();
+    expect(await c.lookup(track("Wonderwall", "Oasis", "sp1"))).toEqual({ match: null, confidence: 0, method: "none", candidates: [] });
+  });
+
+  it("confirming a song links the Spotify track, so the next lookup is certain", async () => {
+    const { c, seven } = await seeded();
+    const t = track("Totally different title", "x", "sp-seven");
+    expect((await c.lookup(t)).match).toBeNull();
+    await c.confirm(t, seven);
+    expect(await c.lookup(t)).toEqual({ match: seven, confidence: 1, method: "external-id", candidates: [{ ...seven, score: 1 }] });
+  });
+
+  it("a new confirmation replaces the previous one", async () => {
+    const { c, seven, tempo } = await seeded();
+    const t = track("Something", "x", "sp1");
+    await c.confirm(t, seven);
+    await c.confirm(t, tempo);
+    expect((await c.lookup(t)).match).toEqual(tempo);
+  });
+
+  it("without a Spotify ID, confirming stores nothing", async () => {
+    const { c, seven } = await seeded();
+    const t = track("Totally different title", "x");
+    await c.confirm(t, seven);
+    expect((await c.lookup(t)).match).toBeNull();
+  });
+
+  it("forgets the link when the song is deleted", async () => {
+    const { c, seven } = await seeded();
+    const t = track("Seven Nation Army", "The White Stripes", "sp-seven");
+    await c.confirm(t, seven);
+    await c.deleteTab(seven.tabs[0].id);
+    expect((await c.lookup(t)).match).toBeNull();
+    // A new import of the song isn't linked to the old confirmation.
+    const again = (await c.addTab(tab("Seven Nation Army (Live)", "White Stripes"))).song;
+    expect(await c.lookup(t)).toMatchObject({ method: "exact", match: again });
+  });
+
+  it("searches songs by title or artist", async () => {
+    const { c, seven, wonderwall } = await seeded();
+    expect((await c.search("nation"))[0]).toEqual({ ...seven, score: expect.any(Number) });
+    expect((await c.search("oasis")).map((s) => s.id)).toEqual([wonderwall.id]);
+    expect(await c.search("  ")).toEqual([]);
+  });
+});
