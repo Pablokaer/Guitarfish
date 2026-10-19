@@ -10,9 +10,12 @@ import type { GrayFrame } from "./tracker";
  */
 
 export type TrackRequest =
-  /** `sent`: this frame also went to the model. `at`: when it was taken, in the main thread's ms. */
-  | { type: "frame"; id: number; bitmap: ImageBitmap; sent: boolean; strings: number; at: number }
-  /** `at`: when the answer came, in the main thread's ms (the frames' clock). */
+  /**
+   * `width`: the camera frame's own width (the bitmap may be shrunk); `sent`: this frame
+   * also went to the model; `at`: when it was taken, in the main thread's ms.
+   */
+  | { type: "frame"; id: number; bitmap: ImageBitmap; width: number; sent: boolean; strings: number; at: number }
+  /** `at`: when the frame it describes was taken, in the main thread's ms (the frames' clock). */
   | { type: "answer"; result: NeckResult; at: number }
   | { type: "reset" };
 
@@ -61,7 +64,7 @@ self.onmessage = (e: MessageEvent<TrackRequest>) => {
   if (m.type === "frame") {
     follower.strings = m.strings;
     const f = gray(m.bitmap);
-    if (f) follower.frame(f.g, m.bitmap.width, m.at, f.rgba);
+    if (f) follower.frame(f.g, m.width, m.at, f.rgba);
     if (m.sent) follower.sent();
     lastId = m.id;
     reply(m.id, m.bitmap);
