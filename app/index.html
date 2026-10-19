@@ -8,60 +8,12 @@
   </head>
   <body>
     <div id="app" class="app">
-      <!-- ============ Top: Spotify player (expanded / collapsed strip / hidden) ============ -->
-      <header id="player" class="player" data-state="expanded" data-tauri-drag-region>
-        <div class="player-full" data-tauri-drag-region>
-          <div class="traffic-space" data-tauri-drag-region></div>
-          <div class="np" data-tauri-drag-region>
-            <div id="np-art" class="art"><i data-icon="music" data-size="22"></i></div>
-            <div class="np-meta" data-tauri-drag-region>
-              <div id="np-title" class="np-title">Waiting for Spotify…</div>
-              <div id="np-artist" class="np-artist">Play a song in Spotify on this device</div>
-            </div>
-          </div>
-
-          <div class="transport" data-tauri-drag-region>
-            <div id="transport-buttons" class="transport-buttons" hidden>
-              <button id="btn-prev" class="icon-btn" type="button" title="Previous track" aria-label="Previous track"><i data-icon="prev" data-size="18"></i></button>
-              <button id="btn-play" class="play-btn" type="button" title="Play" aria-label="Play"><i data-icon="play" data-size="18"></i></button>
-              <button id="btn-next" class="icon-btn" type="button" title="Next track" aria-label="Next track"><i data-icon="next" data-size="18"></i></button>
-            </div>
-            <div class="timeline">
-              <span id="np-pos" class="time">–:––</span>
-              <div id="np-progress" class="progress" role="progressbar" aria-label="Playback position" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-                <div id="np-progress-fill" class="progress-fill"></div>
-              </div>
-              <span id="np-dur" class="time">–:––</span>
-            </div>
-          </div>
-
-          <div class="player-side" data-tauri-drag-region>
-            <div id="volume" class="volume" hidden>
-              <button id="btn-mute" class="icon-btn small" type="button" title="Mute" aria-label="Mute"><i data-icon="volume" data-size="16"></i></button>
-              <input id="volume-range" type="range" min="0" max="100" step="1" value="50" aria-label="Spotify volume" />
-            </div>
-            <span id="status-pill" class="status-pill" data-tone="idle" role="status" aria-live="polite"><span class="dot"></span><span class="status-label">Waiting for playback</span></span>
-            <button id="btn-player-collapse" class="icon-btn small" type="button" title="Collapse player (⌘2)" aria-label="Collapse player"><i data-icon="chevronUp" data-size="16"></i></button>
-          </div>
-        </div>
-
-        <div class="player-strip" data-tauri-drag-region>
-          <div class="traffic-space" data-tauri-drag-region></div>
-          <span class="mini-dot" id="strip-dot" data-tone="idle"></span>
-          <div class="strip-meta" data-tauri-drag-region>
-            <span id="strip-title" class="strip-title">Waiting for Spotify…</span>
-            <span id="strip-artist" class="strip-artist"></span>
-          </div>
-          <span id="strip-status" class="strip-status" data-tauri-drag-region>Waiting for playback</span>
-          <button id="btn-player-expand" class="icon-btn small" type="button" title="Expand player (⌘2)" aria-label="Expand player"><i data-icon="chevronDown" data-size="16"></i></button>
-        </div>
-
-        <div class="titlebar" data-tauri-drag-region>
-          <div class="traffic-space" data-tauri-drag-region></div>
-          <span id="titlebar-text" class="titlebar-text" data-tauri-drag-region>Guitarfish</span>
-          <button id="btn-exit-focus" class="focus-exit" type="button" title="Exit Focus Mode (⌘⇧F or Esc)"><i data-icon="exitFocus" data-size="13"></i><span>Exit Focus</span></button>
-          <button id="btn-player-show" class="icon-btn tiny" type="button" title="Show Spotify player (⌘⇧2)" aria-label="Show Spotify player"><i data-icon="chevronDown" data-size="14"></i></button>
-        </div>
+      <!-- ============ Top: title bar (macOS window buttons, Focus Mode) ============ -->
+      <header id="titlebar" class="titlebar" data-tauri-drag-region>
+        <div class="traffic-space" data-tauri-drag-region></div>
+        <span id="titlebar-text" class="titlebar-text" data-tauri-drag-region>Guitarfish</span>
+        <button id="btn-exit-focus" class="focus-exit" type="button" title="Exit Focus Mode (⌘⇧F or Esc)"><i data-icon="exitFocus" data-size="13"></i><span>Exit Focus</span></button>
+        <button id="btn-player-show" class="icon-btn tiny" type="button" title="Show Spotify player (⌘⇧2)" aria-label="Show Spotify player"><i data-icon="chevronUp" data-size="14"></i></button>
       </header>
 
       <div class="body">
@@ -75,6 +27,7 @@
             </div>
             <ul class="nav-list">
               <li><button class="nav-item" data-view="tab" title="Now Playing" aria-label="Now Playing"><i data-icon="nowPlaying"></i><span class="label">Now Playing</span></button></li>
+              <li><button class="nav-item" data-view="solos" title="Solos: scales in the song's key" aria-label="Solos"><i data-icon="scale"></i><span class="label">Solos</span></button></li>
               <li><button class="nav-item" data-view="search" title="Search (⌘K)" aria-label="Search"><i data-icon="search"></i><span class="label">Search</span></button></li>
               <li><button class="nav-item" data-view="history" title="History" aria-label="History"><i data-icon="history"></i><span class="label">History</span></button></li>
               <li><button class="nav-item" data-view="favorites" title="Favorites" aria-label="Favorites"><i data-icon="star"></i><span class="label">Favorites</span></button></li>
@@ -108,6 +61,7 @@
                 <input id="tb-search-input" type="search" placeholder="Search songs…" aria-label="Search Songsterr" />
               </form>
               <div class="tb-group">
+                <button id="btn-solos" class="icon-btn" type="button" title="Solos: scales in the song's key" aria-label="Solos" aria-pressed="false"><i data-icon="scale" data-size="17"></i></button>
                 <button id="btn-fav" class="icon-btn" type="button" title="Save to favorites" aria-label="Save to favorites" aria-pressed="false" disabled><i data-icon="star" data-size="17"></i></button>
                 <button id="btn-refresh" class="icon-btn" type="button" title="Reload Songsterr page" aria-label="Reload Songsterr page" disabled><i data-icon="refresh" data-size="17"></i></button>
                 <button id="btn-external" class="icon-btn" type="button" title="Open in browser" aria-label="Open in browser" disabled><i data-icon="external" data-size="17"></i></button>
@@ -248,6 +202,54 @@
           </div>
         </aside>
       </div>
+
+      <!-- ============ Bottom: Spotify player (expanded / collapsed strip / hidden) ============ -->
+      <footer id="player" class="player" data-state="expanded">
+        <div class="player-full">
+          <div class="np">
+            <div id="np-art" class="art"><i data-icon="music" data-size="22"></i></div>
+            <div class="np-meta">
+              <div id="np-title" class="np-title">Waiting for Spotify…</div>
+              <div id="np-artist" class="np-artist">Play a song in Spotify on this device</div>
+            </div>
+          </div>
+
+          <div class="transport">
+            <div id="transport-buttons" class="transport-buttons" hidden>
+              <button id="btn-prev" class="icon-btn" type="button" title="Previous track" aria-label="Previous track"><i data-icon="prev" data-size="18"></i></button>
+              <button id="btn-play" class="play-btn" type="button" title="Play" aria-label="Play"><i data-icon="play" data-size="18"></i></button>
+              <button id="btn-next" class="icon-btn" type="button" title="Next track" aria-label="Next track"><i data-icon="next" data-size="18"></i></button>
+            </div>
+            <div class="timeline">
+              <span id="np-pos" class="time">–:––</span>
+              <div id="np-progress" class="progress" role="progressbar" aria-label="Playback position" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div id="np-progress-fill" class="progress-fill"></div>
+              </div>
+              <span id="np-dur" class="time">–:––</span>
+            </div>
+          </div>
+
+          <div class="player-side">
+            <div id="volume" class="volume" hidden>
+              <button id="btn-mute" class="icon-btn small" type="button" title="Mute" aria-label="Mute"><i data-icon="volume" data-size="16"></i></button>
+              <input id="volume-range" type="range" min="0" max="100" step="1" value="50" aria-label="Spotify volume" />
+            </div>
+            <span id="status-pill" class="status-pill" data-tone="idle" role="status" aria-live="polite"><span class="dot"></span><span class="status-label">Waiting for playback</span></span>
+            <button id="btn-player-collapse" class="icon-btn small" type="button" title="Collapse player (⌘2)" aria-label="Collapse player"><i data-icon="chevronDown" data-size="16"></i></button>
+          </div>
+        </div>
+
+        <div class="player-strip">
+          <span class="mini-dot" id="strip-dot" data-tone="idle"></span>
+          <div class="strip-meta">
+            <span id="strip-title" class="strip-title">Waiting for Spotify…</span>
+            <span id="strip-artist" class="strip-artist"></span>
+          </div>
+          <span id="strip-status" class="strip-status">Waiting for playback</span>
+          <button id="btn-player-expand" class="icon-btn small" type="button" title="Expand player (⌘2)" aria-label="Expand player"><i data-icon="chevronUp" data-size="16"></i></button>
+        </div>
+
+      </footer>
     </div>
 
     <script type="module" src="/src/main.ts"></script>

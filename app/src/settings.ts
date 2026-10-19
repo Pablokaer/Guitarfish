@@ -1,3 +1,5 @@
+import { scaleById } from "./scales";
+
 /** Per-device settings, kept in the webview's localStorage. */
 export interface Settings {
   followOffsetSec: number;
@@ -11,6 +13,11 @@ export interface Settings {
   /** Search Songsterr when the song changes. Off: only on request. */
   autoSearch: boolean;
   theme: "graphite" | "midnight";
+  /** Solos view: the scale shown for major and for minor keys (scales.ts ids). */
+  soloScaleMajor: string;
+  soloScaleMinor: string;
+  /** Solos view: label the neck with note names or scale degrees. */
+  soloLabels: "notes" | "degrees";
   /** Bumped when a default changes meaning; see loadSettings. */
   version: number;
 }
@@ -27,6 +34,9 @@ export function defaultSettings(): Settings {
     followSpotify: true,
     autoSearch: true,
     theme: "graphite",
+    soloScaleMajor: "major-pentatonic",
+    soloScaleMinor: "minor-pentatonic",
+    soloLabels: "notes",
     version: VERSION,
   };
 }
@@ -43,6 +53,9 @@ export function parseSettings(raw: unknown): Settings {
   // the main viewer, so start there once; the user can still switch back.
   if (!((stored.version ?? 1) >= 2)) s.songsterrPanel = true;
   if (s.theme !== "graphite" && s.theme !== "midnight") s.theme = defaults.theme;
+  if (!scaleById(String(s.soloScaleMajor))) s.soloScaleMajor = defaults.soloScaleMajor;
+  if (!scaleById(String(s.soloScaleMinor))) s.soloScaleMinor = defaults.soloScaleMinor;
+  if (s.soloLabels !== "notes" && s.soloLabels !== "degrees") s.soloLabels = defaults.soloLabels;
   s.version = VERSION;
   return s;
 }

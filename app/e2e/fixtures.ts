@@ -79,6 +79,8 @@ export class FakeTauri {
   nowPlaying: Track | null = null;
   songsterr: SongsterrResult[] = [...SONGSTERR];
   songsterrDown = false;
+  /** Answers of the `song_key` command by "artist|title"; other songs have no known key. */
+  songKeys: Record<string, { tonic: number; mode: "major" | "minor"; tempo: number | null; via: "spotify-id" | "isrc" }> = {};
   capabilities = { transport: true, seek: true, volume: false, events: false };
   /** The tabs on the device when the test's page first loads. */
   seed: SeedTab[] = [...CATALOGUE];
@@ -114,6 +116,8 @@ export class FakeTauri {
         const words = String(args.query).toLowerCase().split(/\s+/).filter(Boolean);
         return this.songsterr.filter((r) => words.some((w) => `${r.artist} ${r.title}`.toLowerCase().includes(w)));
       }
+      case "song_key":
+        return this.songKeys[`${args.artist}|${args.title}`] ?? null;
       case "plugin:app|version":
         return "0.4.0";
       default:

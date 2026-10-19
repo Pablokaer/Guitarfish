@@ -17,7 +17,8 @@
     "@tauri-apps/plugin-notification": "^2.7.0",
     "@tauri-apps/plugin-opener": "^2.5.0",
     "@tauri-apps/plugin-process": "^2.4.0",
-    "@tauri-apps/plugin-updater": "^2.14.0"
+    "@tauri-apps/plugin-updater": "^2.14.0",
+    "onnxruntime-web": "^1.30.0"
   },
   "devDependencies": {
     "@coderline/alphatab-vite": "^1.8.4",

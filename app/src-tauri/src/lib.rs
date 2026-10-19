@@ -1,3 +1,4 @@
+mod songkey;
 mod songsterr;
 
 /// Layout commands offered in the native menu. Their accelerators also work while
@@ -40,7 +41,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_nowplaying::init())
-        .invoke_handler(tauri::generate_handler![songsterr::songsterr_search])
+        .invoke_handler(tauri::generate_handler![songsterr::songsterr_search, songkey::song_key])
         .setup(|_app| {
             #[cfg(target_os = "macos")]
             layout_menu(_app)?;

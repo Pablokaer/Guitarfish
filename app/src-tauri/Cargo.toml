@@ -20,7 +20,7 @@ tauri-plugin-nowplaying = { path = "../plugins/tauri-plugin-nowplaying" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri-plugin-notification = "2"
-# Songsterr search (src/songsterr.rs): rustls with ring and bundled webpki roots, so
+# Songsterr search and key lookup (src/songsterr.rs, src/songkey.rs): rustls with ring and bundled webpki roots, so
 # it needs no platform TLS or certificate store and works the same on Android.
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 

@@ -244,6 +244,18 @@ export class TabViewer {
     }
   }
 
+  /** The loaded score, or null. */
+  get score(): alphaTab.model.Score | null {
+    return this.api.score ?? null;
+  }
+
+  /** Raw tuning (MIDI pitches, string 1 first) and capo of the first shown track. */
+  stringTuning(): { pitches: number[]; capo: number } | null {
+    const score = this.api.score;
+    const track = this.api.tracks[0] ?? score?.tracks[0];
+    return score && track ? staffTuning(score, track.index) : null;
+  }
+
   /** Tuning and capo of the first shown track, or null when it has no strings. */
   tuning(): TuningInfo | null {
     const score = this.api.score;

@@ -29,7 +29,7 @@
   --tools-w: 300px;
   --toolbar-h: 44px;
   --rail-h: 12px;
-  --traffic-w: 0px; /* set on macOS, where the window buttons sit over the player */
+  --traffic-w: 0px; /* set on macOS, where the window buttons sit over the title bar */
 
   --radius: 10px;
   --radius-sm: 7px;
@@ -112,31 +112,38 @@ kbd { display: inline-block; min-width: 18px; padding: 1px 5px; border-radius: 4
 .app { height: 100%; display: flex; flex-direction: column; min-width: 0; }
 .body { flex: 1; display: flex; min-height: 0; min-width: 0; }
 
-/* ---------- Player ---------- */
+/* ---------- Title bar ----------
+   On macOS it is always there, under the overlaid window buttons; elsewhere it
+   only shows in Focus Mode, to hold the Exit Focus button. */
+.titlebar {
+  flex: none; height: 0; overflow: hidden; display: flex; align-items: center; gap: 10px; padding-right: 8px;
+  background: var(--sidebar); border-bottom: 0 solid var(--border);
+  transition: height var(--t) var(--ease);
+}
+:root.platform-mac .titlebar, .titlebar.focus { height: var(--titlebar-h); border-bottom-width: 1px; }
+.titlebar:not([data-player="hidden"]) #btn-player-show { display: none; }
+.traffic-space { flex: none; width: var(--traffic-w); align-self: stretch; }
+:root:not(.platform-mac) .traffic-space { width: 4px; }
+
+/* ---------- Player (bottom) ---------- */
 .player {
   position: relative; flex: none; height: var(--player-h); overflow: hidden;
-  background: linear-gradient(180deg, #141b25 0%, var(--sidebar) 100%);
-  border-bottom: 1px solid var(--border);
+  background: linear-gradient(0deg, #141b25 0%, var(--sidebar) 100%);
+  border-top: 1px solid var(--border);
   transition: height var(--t) var(--ease);
 }
 :root[data-theme="midnight"] .player { background: var(--sidebar); }
 .player[data-state="collapsed"] { height: var(--strip-h); }
-.player[data-state="hidden"] { height: var(--titlebar-h); background: var(--sidebar); }
-/* Without the overlay title bar (Windows, browser) the hidden player needs no strip, except in Focus Mode. */
-:root:not(.platform-mac) .player[data-state="hidden"]:not(.focus) { height: 0; border-bottom-width: 0; }
+.player[data-state="hidden"] { height: 0; border-top-width: 0; }
 
-.player-full, .player-strip, .titlebar {
-  position: absolute; inset: 0 0 auto 0; display: flex; align-items: center; gap: 14px; padding-right: 12px;
+.player-full, .player-strip {
+  position: absolute; inset: 0 0 auto 0; display: flex; align-items: center; gap: 14px; padding: 0 12px;
   transition: opacity var(--t) var(--ease);
 }
 .player-full { height: var(--player-h); }
 .player-strip { height: var(--strip-h); gap: 10px; }
-.titlebar { height: var(--titlebar-h); gap: 10px; padding-right: 8px; }
 .player:not([data-state="expanded"]) .player-full,
-.player:not([data-state="collapsed"]) .player-strip,
-.player:not([data-state="hidden"]) .titlebar { opacity: 0; pointer-events: none; visibility: hidden; }
-.traffic-space { flex: none; width: var(--traffic-w); align-self: stretch; }
-:root:not(.platform-mac) .traffic-space { width: 4px; }
+.player:not([data-state="collapsed"]) .player-strip { opacity: 0; pointer-events: none; visibility: hidden; }
 
 .np { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1 1 0; }
 .art {
@@ -197,8 +204,8 @@ kbd { display: inline-block; min-width: 18px; padding: 1px 5px; border-radius: 4
   transition: color var(--t), border-color var(--t);
 }
 .focus-exit:hover { color: var(--text); border-color: rgb(30 215 96 / 0.5); }
-.player.focus .focus-exit { display: inline-flex; }
-.player.focus #btn-player-show { display: none; }
+.titlebar.focus .focus-exit { display: inline-flex; }
+.titlebar.focus #btn-player-show { display: none; }
 
 /* ---------- Navigation sidebar ---------- */
 .nav {
@@ -328,6 +335,65 @@ kbd { display: inline-block; min-width: 18px; padding: 1px 5px; border-radius: 4
 .row-wrap .icon-btn { margin-right: 8px; }
 .rows .empty-row { padding: 14px; color: var(--muted); }
 .btn.danger { color: var(--error); border-color: rgb(255 107 107 / 0.5); }
+
+/* Solos: key, scale picker, the scale on the neck and as tab */
+.page-inner.solos { max-width: 1100px; display: grid; gap: 16px; }
+.solos .page-head { margin-bottom: 0; }
+.solos-song { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.solos-key-main { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.solos-key-main > div:first-child { flex: 1; min-width: 200px; }
+.solos-key-name { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; text-transform: capitalize; }
+.solos-key-sub { margin-top: 2px; font-size: 12px; }
+.solos-key-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.solos-meter { height: 4px; border-radius: 2px; background: var(--bg); overflow: hidden; }
+.solos-meter div { height: 100%; background: var(--accent); transition: width 0.1s linear; }
+.solos-error { color: var(--warn); }
+.solos-alt { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; }
+.chip { height: 24px; padding: 0 10px; border-radius: 12px; border: 1px solid var(--border); background: var(--elevated); font-size: 12px; text-transform: capitalize; }
+.chip:hover { background: var(--hover); }
+.solos-pickers { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px 20px; padding-top: 10px; border-top: 1px solid var(--border); }
+.solos-pickers .select-row { grid-template-columns: 48px 1fr; }
+.solos-pickers select { width: 100%; }
+.solos-keypick { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.solos-notes h2 { margin: 0 0 8px; font-size: 15px; font-weight: 650; }
+.solos-chips { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; }
+.solos-chips li { display: grid; justify-items: center; min-width: 42px; padding: 5px 8px; border-radius: var(--radius-sm); background: var(--surface); border: 1px solid var(--border); }
+.solos-chips li b { font-size: 14px; }
+.solos-chips li small { color: var(--muted); font-size: 11px; }
+.solos-chips li.root { border-color: rgb(30 215 96 / 0.5); background: var(--accent-soft); }
+.solos-chips li.root b { color: var(--accent); }
+.solos-neck-head { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.solos-neck-head .segmented { flex-wrap: wrap; }
+.solos-neck-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* Scale over the camera picture (fretcam.ts) */
+.fretcam { position: fixed; inset: 0; z-index: 1000; display: grid; grid-template-rows: auto 1fr auto; gap: 8px; padding: max(10px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); background: #000; color: var(--text); }
+.fretcam-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.fretcam-title { flex: 1; min-width: 140px; font-size: 14px; }
+.fretcam-bar .segmented { flex-wrap: wrap; }
+.fretcam-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.fretcam-box { position: relative; min-height: 0; display: grid; place-items: center; overflow: hidden; }
+.fretcam-stage { position: relative; width: 100%; height: 100%; }
+.fretcam-stage video, .fretcam-stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+/* The video only feeds the canvas, which draws each frame with its notes. */
+.fretcam-stage video { opacity: 0; pointer-events: none; }
+.fretcam-stage canvas { background: #000; }
+.fretcam-msg { margin: 0; text-align: center; }
+.solos-neck { overflow-x: auto; padding: 10px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--border); }
+.neck { display: block; width: 100%; min-width: 760px; height: auto; }
+.neck .string { stroke: #8b94a3; }
+.neck .fret { stroke: var(--border); stroke-width: 2; }
+.neck .nut { fill: #c9ced6; }
+.neck .inlay { fill: var(--elevated); }
+.neck text { font-size: 11px; text-anchor: middle; fill: var(--faint); }
+.neck .string-name { text-anchor: start; fill: var(--muted); font-weight: 600; }
+.neck .dot circle { fill: #3a4454; stroke: var(--surface); stroke-width: 2; }
+.neck .dot text { fill: var(--text); font-weight: 600; font-size: 10.5px; }
+.neck .dot.root circle { fill: var(--accent); }
+.neck .dot.root text { fill: var(--accent-ink); }
+.neck .dot.dim { opacity: 0.18; }
+.solos-tab h3 { margin: 0 0 8px; font-size: 13px; font-weight: 650; }
+.solos-tab pre { margin: 0; padding: 14px; overflow-x: auto; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--border); font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; user-select: text; -webkit-user-select: text; }
 
 /* My tabs: a song row, then its tab files */
 .tab-files { list-style: none; margin: 0; padding: 0 14px 10px 44px; }

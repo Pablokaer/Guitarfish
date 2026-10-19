@@ -5,5 +5,11 @@
   <!-- Shown by macOS the first time Guitarfish asks Spotify what is playing. -->
   <key>NSAppleEventsUsageDescription</key>
   <string>Guitarfish asks Spotify which song is playing so it can show the matching tab.</string>
+  <!-- Shown the first time the Solos view listens for the song's key. -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Guitarfish listens to the music playing to find its key for the Solos scales. Nothing is recorded.</string>
+  <!-- Shown the first time Solos draws the scale over the camera picture of the guitar. -->
+  <key>NSCameraUsageDescription</key>
+  <string>Guitarfish shows the scale over the camera picture of your guitar. Nothing is recorded.</string>
 </dict>
 </plist>
