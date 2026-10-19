@@ -95,6 +95,12 @@ export class FretCam {
   private shown: ImageBitmap | null = null;
   private looks = 0;
   private searchAt = 0;
+  /** Each camera request and frame loop gets a number; only the newest one may act. */
+  private startGen = 0;
+  private loopGen = 0;
+  /** The theme's colours, read once per open (not on every frame). */
+  private accent = "#1ed760";
+  private accentInk = "#04140a";
   /** Dev builds: saving frames to train the model on this guitar. */
   private recording: { session: string; count: number; lastAt: number } | null = null;
   private onKey = (e: KeyboardEvent) => {
@@ -141,6 +147,9 @@ export class FretCam {
     this.resize.observe(this.box);
     document.addEventListener("keydown", this.onKey);
     document.body.append(root);
+    const css = getComputedStyle(document.documentElement);
+    this.accent = css.getPropertyValue("--accent").trim() || "#1ed760";
+    this.accentInk = css.getPropertyValue("--accent-ink").trim() || "#04140a";
     this.renderBar();
     this.startWorkers();
     this.loop();
@@ -157,6 +166,7 @@ export class FretCam {
 
   close(): void {
     this.stop();
+    this.loopGen++;
     this.trackWorker?.terminate();
     this.modelWorker?.terminate();
     this.trackWorker = this.modelWorker = null;
@@ -175,21 +185,30 @@ export class FretCam {
   // ---- Camera ---------------------------------------------------------------------
 
   private async start(): Promise<void> {
+    const gen = ++this.startGen;
     this.error = null;
     this.renderMsg();
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: this.settings.facing }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
-        audio: false,
-      });
-      if (!this.root) {
-        stream.getTracks().forEach((t) => t.stop()); // closed while asking
+      // Native frames, not rescaled ones, kept in focus and exposed as the light changes:
+      // the frets are thin, and a soft or rescaled picture loses them.
+      const video = {
+        facingMode: { ideal: this.settings.facing },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        frameRate: { ideal: 30 },
+        resizeMode: { ideal: "none" },
+        advanced: [{ focusMode: "continuous" }, { exposureMode: "continuous" }],
+      } as unknown as MediaTrackConstraints;
+      const stream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
+      if (!this.root || gen !== this.startGen) {
+        stream.getTracks().forEach((t) => t.stop()); // closed, or asked again, while asking
         return;
       }
       this.stream = stream;
       this.video.srcObject = stream;
       await this.video.play().catch(() => undefined);
     } catch (e) {
+      if (gen !== this.startGen) return;
       const denied = e instanceof DOMException && (e.name === "NotAllowedError" || e.name === "SecurityError");
       const missing = e instanceof DOMException && (e.name === "NotFoundError" || e.name === "OverconstrainedError");
       this.error = denied
@@ -202,6 +221,7 @@ export class FretCam {
   }
 
   private stop(): void {
+    this.startGen++;
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
     if (this.root) this.video.srcObject = null;
@@ -251,7 +271,7 @@ export class FretCam {
       this.modelBusy = false;
       const r = e.data.result;
       if (!r.ok && r.message) console.warn("fret finder", r.message);
-      this.post({ type: "answer", result: r });
+      this.post({ type: "answer", result: r, at: performance.now() });
     };
     const failed = (e: ErrorEvent) => {
       console.warn("fret finder worker", e.message);
@@ -270,23 +290,34 @@ export class FretCam {
 
   // ---- Frames -----------------------------------------------------------------------
 
-  /** Every video frame: take it (unless the tracker is full) and hand it on. */
+  /**
+   * Every video frame: take it (unless the tracker is full) and hand it on. Without
+   * requestVideoFrameCallback, on each screen refresh that shows a new frame.
+   */
   private loop(): void {
     const v = this.video;
+    const gen = ++this.loopGen;
+    const byFrame = "requestVideoFrameCallback" in v;
+    let lastFrames = -1;
+    const next = () => (byFrame ? v.requestVideoFrameCallback(step) : requestAnimationFrame(step));
     const step = () => {
-      if (!this.root) return;
-      void this.onFrame();
-      if ("requestVideoFrameCallback" in v) v.requestVideoFrameCallback(step);
-      else requestAnimationFrame(step);
+      if (gen !== this.loopGen || !this.root) return;
+      const frames = byFrame ? -1 : (this.video.getVideoPlaybackQuality?.().totalVideoFrames ?? -1);
+      if (frames < 0 || frames !== lastFrames) {
+        lastFrames = frames;
+        void this.onFrame();
+      }
+      next();
     };
-    if ("requestVideoFrameCallback" in v) v.requestVideoFrameCallback(step);
-    else requestAnimationFrame(step);
+    next();
   }
 
   private async onFrame(): Promise<void> {
     const v = this.video;
     if (this.inFlight >= IN_FLIGHT || !this.trackWorker || !this.stream || !v.videoWidth || v.readyState < 2) return;
     const [vw, vh] = [v.videoWidth, v.videoHeight];
+    // When the frame was taken, on this thread's clock: the tracker times the neck by it,
+    // not by when the frame reaches it.
     const now = performance.now();
     const toModel = !this.modelBusy && !!this.modelWorker && now - this.sentAt >= DETECT_EVERY;
     this.inFlight++;
@@ -325,7 +356,7 @@ export class FretCam {
       const req: NeckRequest = { id, bitmap: full, crop, strings };
       this.modelWorker!.postMessage(req, [full]);
     }
-    this.post({ type: "frame", id, bitmap: frame!, sent: !!full, strings }, [frame!]);
+    this.post({ type: "frame", id, bitmap: frame!, sent: !!full, strings, at: now }, [frame!]);
   }
 
   /** The tracker's word on a frame (or on the model's latest answer): draw. */
@@ -338,7 +369,8 @@ export class FretCam {
       this.inFlight = Math.max(0, this.inFlight - 1);
       this.shown?.close();
       this.shown = r.bitmap;
-      if (this.recording && performance.now() - this.recording.lastAt >= RECORD_EVERY) void this.capture(r);
+      // Only frames the neck is locked onto: the rest would be labelled with a guess.
+      if (this.recording && r.locked && r.raw && performance.now() - this.recording.lastAt >= RECORD_EVERY) void this.capture(r);
     }
     this.draw();
     this.renderMsg();
@@ -459,9 +491,7 @@ export class FretCam {
     const k = cw / vw;
     const X = ([x, y]: Pt): Pt => (mirror ? [cw - x * k, y * k] : [x * k, y * k]);
     const dpr = window.devicePixelRatio || 1;
-    const css = getComputedStyle(document.documentElement);
-    const accent = css.getPropertyValue("--accent").trim() || "#1ed760";
-    const accentInk = css.getPropertyValue("--accent-ink").trim() || "#04140a";
+    const { accent, accentInk } = this;
 
     ctx.lineWidth = 1.5 * dpr;
     ctx.strokeStyle = "rgb(255 255 255 / 0.35)";
