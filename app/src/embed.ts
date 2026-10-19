@@ -1,6 +1,6 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { LogicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
-import { getCurrentWebview, Webview } from "@tauri-apps/api/webview";
+import { getAllWebviews, getCurrentWebview, Webview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 /**
@@ -20,6 +20,9 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 export class EmbeddedPage {
   private view: Webview | null = null;
   private seq = 0;
+  /** Labels are unique per page load: a reloaded page must not reuse a label still taken. */
+  private readonly prefix = `embed-${Date.now().toString(36)}-`;
+  private leftoversClosed = false;
   /** Why the view is hidden; it is shown again once no reason is left. */
   private hideReasons = new Set<string>();
   private syncQueued = false;
@@ -58,7 +61,8 @@ export class EmbeddedPage {
     // following the window size.
     await getCurrentWebview().setAutoResize(true);
 
-    const view = new Webview(getCurrentWindow(), `embed-${++this.seq}`, { url, ...this.bounds() });
+    await this.closeLeftovers();
+    const view = new Webview(getCurrentWindow(), `${this.prefix}${++this.seq}`, { url, ...this.bounds() });
     await new Promise<void>((resolve, reject) => {
       void view.once("tauri://created", () => resolve());
       void view.once<string>("tauri://error", (e) => reject(new Error(String(e.payload))));
@@ -66,6 +70,22 @@ export class EmbeddedPage {
     this.view = view;
     if (this.hideReasons.size) await view.hide();
     await this.sync();
+  }
+
+  /**
+   * Closes embedded pages left by an earlier load of this page: a native webview
+   * outlives a reload of the page that made it (a dev reload, or Ctrl+R), and would
+   * sit there unreachable, over the app.
+   */
+  private async closeLeftovers(): Promise<void> {
+    if (this.leftoversClosed) return;
+    this.leftoversClosed = true;
+    try {
+      const old = (await getAllWebviews()).filter((w) => w.label.startsWith("embed-") && !w.label.startsWith(this.prefix));
+      await Promise.all(old.map((w) => w.close().catch((e) => console.warn("closing a leftover embedded page failed", e))));
+    } catch (e) {
+      console.warn("listing webviews failed", e);
+    }
   }
 
   /** Loads the current page again (explicit user action). */

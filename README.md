@@ -11,7 +11,7 @@
 
 Guitarfish runs alongside Spotify. When the song changes, it detects the new track, finds a guitar tab for it and shows it: either the song's page on [Songsterr](https://www.songsterr.com) (desktop) or a tab you imported, rendered locally and scrolled in time with the song.
 
-Everything runs on your device. There is no server to install: the app searches Songsterr itself, and your imported tabs are stored on the device.
+Everything runs on your device. There is no server to install: the app searches Songsterr itself, and your imported tabs are stored on the device. For the Solos view it also looks up each song's key online (title, artist and Spotify track id are sent to Deezer and ReccoBeats).
 
 | Platform | How it detects the song | Status |
 |---|---|---|
@@ -31,6 +31,7 @@ Everything runs on your device. There is no server to install: the app searches 
 - [2. Android app](#2-android-app)
 - [3. Your own tabs](#3-your-own-tabs)
 - [4. Songsterr](#4-songsterr)
+- [Solos: scales in the song's key](#solos-scales-in-the-songs-key)
 - [5. Tests, CI and releases](#5-tests-ci-and-releases)
 - [Known limitations / next steps](#known-limitations--next-steps)
 
@@ -81,6 +82,7 @@ Guitarfish is one program. The only network traffic is the Songsterr search (and
 
 - **Rust shell** (`app/src-tauri/src/lib.rs`) registers the plugins (`opener`, `notification`, `nowplaying`, and on desktop `updater` and `process`) and the `songsterr_search` command. On macOS it also adds a *Layout* menu. The menu's keyboard shortcuts keep working while the Songsterr page has focus; the shell forwards each one to the UI as a `layout-command` event.
 - **Songsterr search** (`app/src-tauri/src/songsterr.rs`): `songsterr_search(query) -> Vec<SongsterrResult>` calls `https://www.songsterr.com/api/songs?pattern=…&size=5` with a 5-second timeout, HTTPS only, on a blocking thread. It drops results Songsterr flags as junk, lists each song's instruments once, and returns `{ songId, title, artist, instruments, url }` with the stable link `https://www.songsterr.com/a/wa/song?id=…`. No tab content is fetched. The command is declared in the app manifest (`build.rs`), so it needs the `allow-songsterr-search` permission, which only the main window has (`capabilities/default.json`): the Songsterr pages in child webviews can't call it.
+- **Key lookup** (`app/src-tauri/src/songkey.rs`): `song_key(title, artist, spotifyId?) -> Option<{ tonic, mode, tempo, via }>` asks `https://api.reccobeats.com/v1/audio-features?ids=…` by Spotify track id; failing that, it searches `https://api.deezer.com/search` for the title and artist, keeps the matching recordings' ISRCs (same title and artist, no live/remix/… versions) and asks ReccoBeats by ISRC. 6-second timeout, HTTPS only, no API keys. Same permission scheme: `allow-song-key`, main window only.
 - **Now-playing plugin** (`app/plugins/tauri-plugin-nowplaying`) has the same commands on every platform:
   - `get_now_playing` returns `{ track }`, a `Track` with title, artist, album, duration, position, play state, Spotify ID, volume, artwork URL and player name.
   - `control` takes `{ action, value }`: play/pause, next, previous, seek (`value` in ms) and volume (`value` 0–100).
@@ -104,7 +106,10 @@ Guitarfish is one program. The only network traffic is the Songsterr search (and
   - `timeline.ts` turns the play order and tempo changes into bar times and finds the bar at a song position.
   - `practice.ts` holds the practice-tool logic: transpose and speed limits, tuning names, which cursor drives the view, and the per-tab settings store.
   - `embed.ts` positions the native Songsterr webview.
-  - Every module except `main.ts`, `icons.ts` and `types.ts` has unit tests.
+  - `scales.ts` is the scale library of the Solos view (every scale as intervals) and lays a scale out on the neck: all notes, playable positions and ASCII tab.
+  - `songkey.ts` looks up the playing song's key online (the `song_key` command); `key.ts` finds a key (Krumhansl–Schmuckler) from a chroma vector, built from a local tab's notes or from microphone spectra; `listen.ts` runs the microphone.
+  - `solos.ts` renders the Solos view and remembers each song's key.
+  - Every module except `main.ts`, `icons.ts`, `types.ts` and `listen.ts` (Web Audio) has unit tests.
 
 ### Data on the device
 
@@ -176,6 +181,7 @@ guitarfish/
 │   ├── src-tauri/                  Rust shell, tauri.conf.json, capabilities, icons
 │   │   ├── src/lib.rs              plugins, menu, command registration
 │   │   ├── src/songsterr.rs        songsterr_search command (Songsterr's public search, links only)
+│   │   ├── src/songkey.rs          song_key command (a recording's key: ReccoBeats, Deezer for the ISRC)
 │   │   ├── build.rs                app manifest: songsterr_search needs a permission
 │   │   └── permissions/            generated allow/deny permissions for the command
 │   └── plugins/tauri-plugin-nowplaying/
@@ -255,13 +261,32 @@ npm run tauri android build
   - *Wrong tab?* lets you pick another result, and that choice is remembered for the song.
   - When Songsterr can't be searched (offline, or Songsterr isn't answering), the status says **Songsterr unreachable** and the search is retried every 5 seconds. Your local tabs keep working.
   - On Android, Songsterr opens in the browser.
-- Around the viewer are the Spotify player (expand, collapse to a strip, or hide), the navigation sidebar (Now Playing, Search, History, Favorites, My tabs, Recent Tabs; expanded, compact or hidden), the Tools sidebar and the toolbar.
+- Around the viewer are the Spotify player (expand, collapse to a strip, or hide), the navigation sidebar (Now Playing, Solos, Search, History, Favorites, My tabs, Recent Tabs; expanded, compact or hidden), the Tools sidebar and the toolbar.
   - Each sidebar has its own hide button, and the layout is saved.
   - **Focus Mode** (⌘⇧F, Esc to leave) hides everything but the tab.
   - Shortcuts are listed in the Tools sidebar and in the macOS *Layout* menu.
   - Hiding or resizing panels only moves the native Songsterr view; it never reloads the page.
 - Songsterr blocks iframes, so the panel is a native child webview laid over the window. That needs Tauri's `unstable` feature (enabled in `src-tauri/Cargo.toml`) and the webview permissions in `src-tauri/capabilities/default.json`.
 - The app only uses Songsterr's public search API for links; it never downloads or stores their tabs, and it doesn't modify their page.
+
+## Solos: scales in the song's key
+
+- The **Solos** button (navigation sidebar, or the scale icon in the toolbar) swaps the tab for scale charts to improvise over the song.
+- The key is found from:
+  - **online**, as soon as the song starts: the key Spotify's analysis gives the recording, served free by [ReccoBeats](https://reccobeats.com) by Spotify track id. Without an id (Windows doesn't report one), a [Deezer](https://developers.deezer.com) search on title and artist finds the recording's ISRC first; live, remix and other versions are skipped unless that's what plays. Calls go through the `song_key` command (`src-tauri/src/songkey.rs`) because Deezer allows no browser calls. The answer is kept for the song, so it shows at once next time, even offline;
+  - **the local tab**, automatically when one opens: every note weighted by its length (at the practice transpose), falling back to the key signature;
+  - **listening**: *Listen for key* hears the music through the microphone for 15 s (play it out loud, not on headphones). Nothing is recorded; each frame is folded into 12 pitch-class levels;
+  - **you**: pick the key note and major/minor, or one of the *Also possible* keys.
+  A key looked up, heard or picked wins over one read from a tab, and is remembered for the song; *Look up online* asks again. Songsterr pages can't be analysed (their tab stays on Songsterr), so with Songsterr listen or pick the key.
+- The scale dropdown has every scale stored in `scales.ts`: major (Ionian) and its modes (Dorian, Phrygian, Lydian, Mixolydian, Aeolian, Locrian), harmonic and melodic minor, Phrygian dominant, Lydian dominant, altered, minor and major pentatonic, minor and major blues, diminished (whole-half and half-whole), whole tone and chromatic. Major and minor keys each remember their own scale, starting on the pentatonic.
+- The scale is drawn on the neck in the local tab's tuning (standard otherwise), root notes highlighted, labelled with note names or degrees. Each position (pentatonic boxes, three notes per string for the modes, blues = pentatonic box + blue note) can be shown alone, with its tablature played up and back down.
+- The microphone needs the system's permission: macOS asks with the text in `src-tauri/Info.plist`, Android with `RECORD_AUDIO` (declared by the nowplaying plugin). Linux WebKitGTK may not offer a microphone to the page; the key can still be picked by hand.
+- **On my guitar** opens the camera and draws the same scale and position over the picture of your own guitar, nothing to mark. Nothing is recorded or sent anywhere. Camera permission: `NSCameraUsageDescription` in `Info.plist`, `CAMERA` on Android (nowplaying plugin's manifest). How it works:
+  - **Finding the frets:** a small model (`src/models/frets.onnx`, YOLO11n oriented boxes, run on the device by [ONNX Runtime Web](https://onnxruntime.ai) in `neckworker.ts`, on the GPU through WebGPU where the webview has it, else on the CPU) finds the fretboard cells behind frets 1–12 by number, and the fretting hand. It looks at a box around the neck (`neckcrop.ts`), blown up and turned level with it whatever angle the guitar is held at; while the neck isn't known, at the whole frame and its parts, level and turned. `fretfit.ts` fits the neck through every corner it found — a homography, so the frets' angles and the board's edges follow the perspective — leaving out cells that disagree and cells under the hand.
+  - **Following it:** between the model's answers, every frame, `tracker.ts` follows points spread along the whole board (a few per fret, none under the hand) by optical flow and moves the neck by the motion that most of them agree on; a rigid neck can't shrink or stretch from one frame to the next, so such motions are refused. `follower.ts` merges the two: once the model has confirmed the tracked neck a few times it is *locked on*, and from then on answers only fine-tune it — a hand over the frets can make the model miscount by a fret, but an answer that far off is ignored unless the model keeps saying so for seconds.
+  - **Smoothness:** the main thread only takes each camera frame (an `ImageBitmap`, on the GPU) and draws it with the notes on one canvas; tracking (`trackworker.ts`) and the model run in workers, and each frame is drawn with the neck found in that very frame, so the notes can't trail the picture.
+  - Hold the guitar with at least three frets in view.
+- The model is trained outside this repository with [Ultralytics](https://github.com/ultralytics/ultralytics) on two datasets from Roboflow Universe, both [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/): [guitar-frets-segmenter](https://universe.roboflow.com/code-and-chords/guitar-frets-segmenter) by code-and-chords (numbered fret cells) and [guitar](https://universe.roboflow.com/b101/guitar-g65u6) by b101 (frets and nut, numbered from the nut for training). The end-to-end test's camera picture (`e2e/fixtures/neck.jpg`) is a frame of the first.
 
 ## 5. Tests, CI and releases
 

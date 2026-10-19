@@ -6,6 +6,10 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { Catalogue } from "./catalogue";
 import { Detector } from "./detector";
 import { EmbeddedPage } from "./embed";
+import { FretCam } from "./fretcam";
+import { detectKey, scoreChroma, signatureKey } from "./key";
+import { KeyListener } from "./listen";
+import { canLookUpKeys, lookUpSongKey } from "./songkey";
 import { hydrateIcons, icon } from "./icons";
 import {
   applyLayoutCommand,
@@ -19,7 +23,9 @@ import {
 import { EntryStore, isSongPage, PickStore, pushHistory, toEntry, toggleFavorite, toResult, trackKey, type TabEntry } from "./library";
 import { cleanTitle, isConfidentMatch, songsterrQuery, songsterrSearchPage } from "./match";
 import { clampSpeed, clampTranspose, cursorSource, PracticeStore, SPEED_PRESETS } from "./practice";
+import { defaultScaleFor, scaleById, STANDARD_TUNING, type Key } from "./scales";
 import { dropLegacyStorage, loadSettings, saveSettings } from "./settings";
+import { alternativesOf, cameraScene, KeyStore, renderSolos, type KeySource, type SolosState } from "./solos";
 import { syncStatus, type SyncStatus } from "./status";
 import "./styles.css";
 import { searchSongsterr } from "./songsterr";
@@ -65,6 +71,7 @@ const el = {
   stripTitle: $("strip-title"),
   stripArtist: $("strip-artist"),
   stripStatus: $("strip-status"),
+  titlebar: $("titlebar"),
   titlebarText: $("titlebar-text"),
   exitFocus: $<HTMLButtonElement>("btn-exit-focus"),
   // nav
@@ -81,6 +88,7 @@ const el = {
   sourceSwitch: $("source-switch"),
   tbSearch: $<HTMLFormElement>("tb-search"),
   tbSearchInput: $<HTMLInputElement>("tb-search-input"),
+  solos: $<HTMLButtonElement>("btn-solos"),
   fav: $<HTMLButtonElement>("btn-fav"),
   refresh: $<HTMLButtonElement>("btn-refresh"),
   external: $<HTMLButtonElement>("btn-external"),
@@ -159,6 +167,14 @@ const history = new EntryStore("tabsync.history");
 const favorites = new EntryStore("tabsync.favorites");
 const picks = new PickStore();
 const practice = new PracticeStore();
+const keys = new KeyStore();
+const listener = new KeyListener();
+const fretcam = new FretCam({
+  setPosition: (n) => {
+    soloPosition = n;
+    renderSolosPage();
+  },
+});
 
 let catalogueOpen: Promise<Catalogue> | null = null;
 /** The on-device tab catalogue (IndexedDB), opened on first use; a failed open is retried next time. */
@@ -186,6 +202,7 @@ const sync = new SyncController({
       viewer.hideHighlight();
       el.tabSelect.hidden = true;
       showPanel(null);
+      songChangedForSolos();
     },
     status: () => renderStatus(),
     openSongsterr: (r) => void openSongsterr(r, "auto"),
@@ -197,7 +214,7 @@ const sync = new SyncController({
 });
 
 // ---- State ---------------------------------------------------------------------
-type View = "tab" | "search" | "history" | "favorites" | "catalogue" | "import";
+type View = "tab" | "solos" | "search" | "history" | "favorites" | "catalogue" | "import";
 type Source = "songsterr" | "local";
 
 let layout: LayoutState = loadLayout();
@@ -262,6 +279,8 @@ function renderLayout() {
   if (wideNav && layout.nav === "expanded") eff.nav = "expanded";
   el.player.dataset.state = eff.player;
   el.player.classList.toggle("focus", layout.focus);
+  el.titlebar.dataset.player = eff.player;
+  el.titlebar.classList.toggle("focus", layout.focus);
   el.center.classList.toggle("focus", layout.focus);
   el.nav.dataset.state = eff.nav;
   el.tools.dataset.visible = String(eff.tools);
@@ -349,6 +368,7 @@ function renderStage() {
     if (b.dataset.view === view) b.setAttribute("aria-current", "page");
     else b.removeAttribute("aria-current");
   }
+  el.solos.setAttribute("aria-pressed", String(view === "solos"));
   el.sourceSwitch.hidden = !(embed && currentSong);
   el.sourceSwitch.querySelectorAll<HTMLButtonElement>("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.source === src)));
   if (!el.local.hidden) viewer.whenShown();
@@ -362,6 +382,8 @@ function setView(v: View) {
   if (v === "history") renderEntryPage("history");
   if (v === "favorites") renderEntryPage("favorites");
   if (v === "catalogue") void renderCataloguePage();
+  if (v === "solos") renderSolosPage();
+  else fretcam.close();
   renderStage();
 }
 
@@ -751,7 +773,11 @@ function setPractice(patch: { transpose?: number; speed?: number }) {
   if (currentTabId == null) return;
   const before = practice.get(currentTabId);
   const p = practice.set(currentTabId, patch);
-  if (p.transpose !== before.transpose) viewer.setTranspose(p.transpose);
+  if (p.transpose !== before.transpose) {
+    viewer.setTranspose(p.transpose);
+    // The tab now sounds in another key.
+    if (songKey?.source === "tab") analyseTab();
+  }
   if (p.speed !== before.speed) viewer.setSpeed(p.speed);
   renderPractice();
 }
@@ -790,7 +816,10 @@ function bindPractice() {
   // Dragging across bars selects them (alphaTab); offer to clear the selection.
   el.tab.addEventListener("pointerup", () => setTimeout(() => (el.prClearSelection.hidden = !viewer.hasSelection), 0));
   viewer.onPlayer = renderPlayer;
-  viewer.onScore = renderTuning;
+  viewer.onScore = () => {
+    renderTuning();
+    scoreLoadedForSolos();
+  };
   renderPlayer(viewer.player);
   renderPractice();
 }
@@ -1210,6 +1239,200 @@ function entryRow(e: TabEntry, kind: "history" | "favorites"): HTMLElement {
   return li;
 }
 
+// ---- Solos (key + scales) ---------------------------------------------------------
+/** The key the Solos view works in, where it came from, and what else it could be. */
+let songKey: { key: Key; source: KeySource; confidence: number | null; alternatives: Key[]; tempo: number | null } | null = null;
+let soloPosition = 0;
+let listenProgress: number | null = null;
+let soloError: string | null = null;
+/** The song whose key is being looked up online, if any. */
+let lookingUpFor: string | null = null;
+
+/** Keys are remembered per song, like Songsterr picks. */
+function songId(): string | null {
+  return sync.current ? trackKey(sync.current) : null;
+}
+
+/** A key read from a tab is a guess; one looked up, heard or picked replaces it. */
+const weakKey = () => !songKey || songKey.source === "tab" || songKey.source === "signature";
+
+function songChangedForSolos() {
+  listener.stop();
+  listenProgress = null;
+  soloError = null;
+  soloPosition = 0;
+  const id = songId();
+  const stored = id ? keys.get(id) : null;
+  songKey = stored
+    ? { key: { tonic: stored.tonic, mode: stored.mode }, source: stored.source, confidence: null, alternatives: [], tempo: stored.tempo ?? null }
+    : null;
+  // Look the key up as soon as the song starts, so Solos is ready when opened.
+  if (!stored) void lookUpKey(false);
+  if (view === "solos") renderSolosPage();
+}
+
+/**
+ * Looks up the playing song's key online. `force` (the user asked) replaces any
+ * key; otherwise only a missing one or one read from a tab.
+ */
+async function lookUpKey(force: boolean) {
+  const track = sync.current;
+  const id = songId();
+  if (!track || !id || !canLookUpKeys() || lookingUpFor === id) return;
+  lookingUpFor = id;
+  soloError = null;
+  if (view === "solos") renderSolosPage();
+  try {
+    const r = await lookUpSongKey(track);
+    if (songId() !== id) return; // the song changed meanwhile
+    if (r && (force || weakKey())) {
+      songKey = { key: { tonic: r.tonic, mode: r.mode }, source: "online", confidence: null, alternatives: [], tempo: r.tempo };
+      keys.set(id, { tonic: r.tonic, mode: r.mode, source: "online", ...(r.tempo ? { tempo: r.tempo } : {}) });
+      soloPosition = 0;
+    } else if (!r && force) {
+      soloError = "This song's key isn't in the online database. Listen for it, or pick it below.";
+    }
+  } catch (e) {
+    console.warn("key lookup failed", e);
+    if (force && songId() === id) soloError = "Couldn't reach the key database. Check the connection, listen for the key, or pick it below.";
+  } finally {
+    if (lookingUpFor === id) lookingUpFor = null;
+    if (view === "solos") renderSolosPage();
+  }
+}
+
+/** A local tab finished loading: read its key, unless a better one is known for this song. */
+function scoreLoadedForSolos() {
+  if (weakKey()) analyseTab();
+  else if (view === "solos") renderSolosPage();
+}
+
+/** Key from the local tab's notes (at the practice transpose), else from its key signature. */
+function analyseTab() {
+  const score = viewer.score;
+  if (!score) return;
+  const transpose = currentTabId != null ? practice.get(currentTabId).transpose : 0;
+  const r = detectKey(scoreChroma(score, transpose));
+  if (r) {
+    songKey = { key: r.key, source: "tab", confidence: r.confidence, alternatives: alternativesOf(r), tempo: null };
+  } else {
+    const sig = signatureKey(score);
+    if (sig) songKey = { key: sig, source: "signature", confidence: null, alternatives: [], tempo: null };
+  }
+  soloPosition = 0;
+  if (view === "solos") renderSolosPage();
+}
+
+function setSongKey(key: Key, source: KeySource, confidence: number | null = null, alternatives: Key[] = []) {
+  songKey = { key, source, confidence, alternatives, tempo: null };
+  const id = songId();
+  if (id && (source === "mic" || source === "manual")) keys.set(id, { ...key, source });
+  soloPosition = 0;
+  renderSolosPage();
+}
+
+async function listenForKey() {
+  const forSong = songId();
+  soloError = null;
+  listenProgress = 0;
+  renderSolosPage();
+  try {
+    const r = await listener.listen(({ progress, result }) => {
+      listenProgress = progress;
+      // Show the running guess; it is stored when listening ends.
+      if (result) songKey = { key: result.key, source: "mic", confidence: result.confidence, alternatives: alternativesOf(result), tempo: null };
+      if (view === "solos") renderSolosPage();
+    });
+    listenProgress = null;
+    if (songId() !== forSong) return; // the song changed meanwhile: what was heard is mixed
+    if (r) setSongKey(r.key, "mic", r.confidence, alternativesOf(r));
+    else {
+      soloError = "Nothing was heard. Turn the music up, or use speakers instead of headphones.";
+      renderSolosPage();
+    }
+  } catch (e) {
+    listenProgress = null;
+    const denied = e instanceof DOMException && (e.name === "NotAllowedError" || e.name === "SecurityError");
+    soloError = denied
+      ? "Microphone access was denied. Allow it for Guitarfish in the system settings, or pick the key below."
+      : `Could not open the microphone: ${String(e)}`;
+    renderSolosPage();
+  }
+}
+
+function soloScale(key: Key): string {
+  const id = key.mode === "major" ? settings.soloScaleMajor : settings.soloScaleMinor;
+  return scaleById(id) ? id : defaultScaleFor(key);
+}
+
+function renderSolosPage() {
+  if (view !== "solos") {
+    fretcam.close();
+    return;
+  }
+  const key = songKey?.key ?? { tonic: 9, mode: "minor" as const };
+  const strings = currentSong ? viewer.stringTuning() : null;
+  const t = currentSong ? viewer.tuning() : null;
+  // With a capo, frets count from the capo: the open strings sound that much higher.
+  const tuning = strings ? strings.pitches.map((p) => p + strings.capo) : [...STANDARD_TUNING];
+  const tuningName = t
+    ? `${[t.name ? `${t.name} (${t.notes})` : t.notes, t.capo ? `capo ${t.capo}, frets counted from the capo` : ""].filter(Boolean).join(" · ")}, from the local tab`
+    : "Standard (E A D G B E)";
+  const state: SolosState = {
+    song: sync.current ? label(sync.current) : null,
+    key: songKey?.key ?? null,
+    keySource: songKey?.source ?? null,
+    confidence: songKey?.confidence ?? null,
+    tempo: songKey?.tempo ?? null,
+    lookingUp: lookingUpFor !== null && lookingUpFor === songId(),
+    canLookUp: canLookUpKeys(),
+    alternatives: songKey?.alternatives ?? [],
+    scaleId: soloScale(key),
+    position: soloPosition,
+    labels: settings.soloLabels,
+    tuning,
+    tuningName,
+    canAnalyseTab: !!currentSong && !!viewer.score,
+    listening: listenProgress,
+    canListen: KeyListener.supported(),
+    error: soloError,
+    canUseCamera: FretCam.supported(),
+  };
+  if (fretcam.isOpen) fretcam.update(cameraScene(state));
+  renderSolos(
+    el.page,
+    state,
+    {
+      setKey: (k) => setSongKey(k, "manual"),
+      setScale: (id) => {
+        if (key.mode === "major") settings.soloScaleMajor = id;
+        else settings.soloScaleMinor = id;
+        saveSettings(settings);
+        soloPosition = 0;
+        renderSolosPage();
+      },
+      setPosition: (n) => {
+        soloPosition = n;
+        renderSolosPage();
+      },
+      setLabels: (l) => {
+        settings.soloLabels = l;
+        saveSettings(settings);
+        renderSolosPage();
+      },
+      lookUp: () => void lookUpKey(true),
+      listen: () => void listenForKey(),
+      stopListening: () => listener.stop(),
+      analyseTab: () => {
+        const id = songId();
+        if (id) keys.forget(id);
+        analyseTab();
+      },
+      openCamera: () => void fretcam.open(cameraScene(state)),
+    },
+  );
+}
+
 // ---- Tools sidebar -------------------------------------------------------------
 function applyTheme() {
   document.documentElement.dataset.theme = settings.theme;
@@ -1302,6 +1525,7 @@ function bindChrome() {
   // The installed version comes from Tauri, so a plain browser has nothing to check.
   el.navActions.hidden = !isTauri();
   el.checkUpdates.onclick = () => void checkUpdatesNow();
+  el.solos.onclick = () => setView(view === "solos" ? "tab" : "solos");
   el.fav.onclick = toggleFavoriteShown;
   el.refresh.onclick = () => void embed?.reload();
   el.external.onclick = () => {
