@@ -10,9 +10,10 @@ import type { GrayFrame } from "./tracker";
  */
 
 export type TrackRequest =
-  /** `sent`: this frame also went to the model. */
-  | { type: "frame"; id: number; bitmap: ImageBitmap; sent: boolean; strings: number }
-  | { type: "answer"; result: NeckResult }
+  /** `sent`: this frame also went to the model. `at`: when it was taken, in the main thread's ms. */
+  | { type: "frame"; id: number; bitmap: ImageBitmap; sent: boolean; strings: number; at: number }
+  /** `at`: when the answer came, in the main thread's ms (the frames' clock). */
+  | { type: "answer"; result: NeckResult; at: number }
   | { type: "reset" };
 
 export interface TrackReply {
@@ -39,6 +40,10 @@ function gray(bitmap: ImageBitmap): { g: GrayFrame; rgba: Uint8ClampedArray } | 
   const h = Math.round((w * bitmap.height) / bitmap.width);
   if (!ctx || ctx.canvas.width !== w || ctx.canvas.height !== h) ctx = new OffscreenCanvas(w, h).getContext("2d", { willReadFrequently: true });
   if (!ctx) return null;
+  // Shrunk with proper filtering: a one-step low-quality shrink aliases the thin strings
+  // and fret wires into a shimmer the tracked points would cling to.
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
   ctx.drawImage(bitmap, 0, 0, w, h);
   const px = ctx.getImageData(0, 0, w, h).data;
   const data = new Float32Array(w * h);
@@ -53,16 +58,15 @@ function reply(id: number, bitmap: ImageBitmap | null = null): void {
 
 self.onmessage = (e: MessageEvent<TrackRequest>) => {
   const m = e.data;
-  const now = performance.now();
   if (m.type === "frame") {
     follower.strings = m.strings;
     const f = gray(m.bitmap);
-    if (f) follower.frame(f.g, m.bitmap.width, now, f.rgba);
+    if (f) follower.frame(f.g, m.bitmap.width, m.at, f.rgba);
     if (m.sent) follower.sent();
     lastId = m.id;
     reply(m.id, m.bitmap);
   } else if (m.type === "answer") {
-    follower.answer(m.result, now);
+    follower.answer(m.result, m.at);
     reply(lastId);
   } else {
     follower.reset();

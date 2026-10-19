@@ -131,6 +131,10 @@ export function drawCrop(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderin
   ctx.scale(size / c.w, size / c.h);
   ctx.rotate(-c.angle);
   ctx.translate(-c.cx, -c.cy);
+  // Shrinking a big frame several times over: filtered properly, as the training
+  // pictures were, or thin fret wires flicker in and out.
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
   ctx.drawImage(source, 0, 0);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
