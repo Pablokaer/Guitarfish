@@ -115,4 +115,15 @@ describe("drawCrop", () => {
       "setTransform 1,0,0,1,0,0",
     ]);
   });
+
+  it("filters properly when it shrinks the frame, and bilinear when it blows it up", () => {
+    const quality = (w: number, h: number) => {
+      const ctx = { setTransform() {}, fillRect() {}, translate() {}, scale() {}, rotate() {}, drawImage() {} } as unknown as CanvasRenderingContext2D;
+      drawCrop(ctx, {} as CanvasImageSource, { cx: 0, cy: 0, w, h, angle: 0 }, 640);
+      return [ctx.imageSmoothingEnabled, ctx.imageSmoothingQuality];
+    };
+    expect(quality(1920, 1080)).toEqual([true, "high"]);
+    expect(quality(1280, 320)).toEqual([true, "high"]);
+    expect(quality(480, 270)).toEqual([true, "low"]);
+  });
 });

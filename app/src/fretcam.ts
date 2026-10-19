@@ -1,6 +1,7 @@
-import type { Miss } from "./follower";
-import { cropAround, fullFrame, searchCrops } from "./neckcrop";
+import { TRACK_W, type Miss } from "./follower";
+import { cropAround, fullFrame, searchCrops, type Crop } from "./neckcrop";
 import { DEFAULT_CAM, fretDistance, NeckMap, parseCamSettings, type Calibration, type CamSettings, type Pt } from "./neckmap";
+import { MODEL_SIZE } from "./fretmodel";
 import type { NeckRequest, NeckResult } from "./neckworker";
 import type { TrackReply, TrackRequest } from "./trackworker";
 
@@ -47,6 +48,10 @@ const WHOLE_EVERY = 6;
 const IN_FLIGHT = 2;
 /** Dev builds: while recording, a frame and its neck are saved this often, in ms (vite.config.ts /__capture). */
 const RECORD_EVERY = 500;
+/** Below this many frames a second the neck blurs and the tracker falls behind; a smaller picture is better. */
+const MIN_FPS = 24;
+/** A frame's capture time further than this from now (ms) is on some other clock: not used. */
+const CLOCK_SLACK = 1000;
 
 const MISS_HINT: Record<Miss, string> = {
   loading: "Getting the fret finder ready…",
@@ -98,6 +103,8 @@ export class FretCam {
   /** Each camera request and frame loop gets a number; only the newest one may act. */
   private startGen = 0;
   private loopGen = 0;
+  /** Bumped on every close: work started before it belongs to the old session. */
+  private session = 0;
   /** The theme's colours, read once per open (not on every frame). */
   private accent = "#1ed760";
   private accentInk = "#04140a";
@@ -106,6 +113,20 @@ export class FretCam {
   private onKey = (e: KeyboardEvent) => {
     if (e.key === "Escape") this.close();
   };
+  /** Hidden: the camera goes off (light, battery); shown again: back on. */
+  private onVisible = () => {
+    if (!this.root) return;
+    if (document.hidden) {
+      if (this.stream) {
+        this.stop();
+        this.paused = true;
+      }
+    } else if (this.paused) {
+      this.paused = false;
+      void this.start();
+    }
+  };
+  private paused = false;
 
   constructor(private act: CamActions) {}
 
@@ -146,6 +167,7 @@ export class FretCam {
     this.resize = new ResizeObserver(() => this.fit());
     this.resize.observe(this.box);
     document.addEventListener("keydown", this.onKey);
+    document.addEventListener("visibilitychange", this.onVisible);
     document.body.append(root);
     const css = getComputedStyle(document.documentElement);
     this.accent = css.getPropertyValue("--accent").trim() || "#1ed760";
@@ -167,6 +189,8 @@ export class FretCam {
   close(): void {
     this.stop();
     this.loopGen++;
+    this.session++;
+    this.paused = false;
     this.trackWorker?.terminate();
     this.modelWorker?.terminate();
     this.trackWorker = this.modelWorker = null;
@@ -178,6 +202,7 @@ export class FretCam {
     this.resize?.disconnect();
     this.resize = null;
     document.removeEventListener("keydown", this.onKey);
+    document.removeEventListener("visibilitychange", this.onVisible);
     this.root?.remove();
     this.root = null;
   }
@@ -189,20 +214,19 @@ export class FretCam {
     this.error = null;
     this.renderMsg();
     try {
-      // Native frames, not rescaled ones, kept in focus and exposed as the light changes:
-      // the frets are thin, and a soft or rescaled picture loses them.
-      const video = {
-        facingMode: { ideal: this.settings.facing },
-        width: { ideal: 1920 },
-        height: { ideal: 1080 },
-        frameRate: { ideal: 30 },
-        resizeMode: { ideal: "none" },
-        advanced: [{ focusMode: "continuous" }, { exposureMode: "continuous" }],
-      } as unknown as MediaTrackConstraints;
-      const stream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
+      const stream = await this.openCamera();
       if (!this.root || gen !== this.startGen) {
         stream.getTracks().forEach((t) => t.stop()); // closed, or asked again, while asking
         return;
+      }
+      // Unplugged, taken by another app, or stopped by the system: say so, don't freeze.
+      for (const t of stream.getVideoTracks()) {
+        t.addEventListener("ended", () => {
+          if (this.stream !== stream) return;
+          this.stop();
+          this.error = "The camera stopped (unplugged, or taken by another app). Press Switch camera, or close and open again.";
+          this.renderMsg();
+        });
       }
       this.stream = stream;
       this.video.srcObject = stream;
@@ -217,6 +241,28 @@ export class FretCam {
           ? "No camera was found."
           : `Could not open the camera: ${String(e)}`;
       this.renderMsg();
+    }
+  }
+
+  /**
+   * Native frames, not rescaled ones, at a usable frame rate, kept in focus and exposed as
+   * the light changes: the frets are thin, and a soft or rescaled picture loses them. A
+   * camera that can't do that in full HD gets a smaller native size (720p at 30 rather
+   * than 1080p at 15); one that can't at all, whatever it offers.
+   */
+  private async openCamera(): Promise<MediaStream> {
+    const base = { facingMode: { ideal: this.settings.facing }, width: { ideal: 1920 }, height: { ideal: 1080 } };
+    const best = {
+      ...base,
+      frameRate: { min: MIN_FPS, ideal: 30 },
+      resizeMode: { ideal: "none" },
+      advanced: [{ focusMode: "continuous" }, { exposureMode: "continuous" }],
+    } as unknown as MediaTrackConstraints;
+    try {
+      return await navigator.mediaDevices.getUserMedia({ video: best, audio: false });
+    } catch (e) {
+      if (!(e instanceof DOMException && e.name === "OverconstrainedError")) throw e;
+      return navigator.mediaDevices.getUserMedia({ video: { ...base, frameRate: { ideal: 30 } }, audio: false });
     }
   }
 
@@ -271,7 +317,8 @@ export class FretCam {
       this.modelBusy = false;
       const r = e.data.result;
       if (!r.ok && r.message) console.warn("fret finder", r.message);
-      this.post({ type: "answer", result: r, at: performance.now() });
+      // Timed by the frame it describes, not by when it came: a slow answer is an old one.
+      this.post({ type: "answer", result: r, at: this.sentAt });
     };
     const failed = (e: ErrorEvent) => {
       console.warn("fret finder worker", e.message);
@@ -299,64 +346,86 @@ export class FretCam {
     const gen = ++this.loopGen;
     const byFrame = "requestVideoFrameCallback" in v;
     let lastFrames = -1;
+    let lastTime = -1;
     const next = () => (byFrame ? v.requestVideoFrameCallback(step) : requestAnimationFrame(step));
-    const step = () => {
+    const step = (_now?: number, meta?: VideoFrameCallbackMetadata) => {
       if (gen !== this.loopGen || !this.root) return;
-      const frames = byFrame ? -1 : (this.video.getVideoPlaybackQuality?.().totalVideoFrames ?? -1);
-      if (frames < 0 || frames !== lastFrames) {
+      if (byFrame) {
+        // When the camera took the frame, if the browser says (same clock as performance.now()).
+        const now = performance.now();
+        const at = meta?.captureTime ?? meta?.expectedDisplayTime ?? now;
+        void this.onFrame(Math.abs(at - now) <= CLOCK_SLACK ? at : now);
+      } else {
+        // A new frame shows as a new count, or (where the count stays 0 for cameras) a new time.
+        const frames = this.video.getVideoPlaybackQuality?.().totalVideoFrames ?? 0;
+        const time = this.video.currentTime;
+        if (frames > 0 ? frames !== lastFrames : time !== lastTime) void this.onFrame(performance.now());
         lastFrames = frames;
-        void this.onFrame();
+        lastTime = time;
       }
       next();
     };
     next();
   }
 
-  private async onFrame(): Promise<void> {
+  /** `at`: when the frame was taken, on this thread's clock: the tracker times the neck by it. */
+  private async onFrame(at: number): Promise<void> {
     const v = this.video;
     if (this.inFlight >= IN_FLIGHT || !this.trackWorker || !this.stream || !v.videoWidth || v.readyState < 2) return;
     const [vw, vh] = [v.videoWidth, v.videoHeight];
-    // When the frame was taken, on this thread's clock: the tracker times the neck by it,
-    // not by when the frame reaches it.
-    const now = performance.now();
-    const toModel = !this.modelBusy && !!this.modelWorker && now - this.sentAt >= DETECT_EVERY;
-    this.inFlight++;
-    if (toModel) {
-      this.modelBusy = true;
-      this.sentAt = now;
-    }
-    let bitmaps: (ImageBitmap | null)[];
-    try {
-      // The frame as it is (cheapest, on the GPU): the tracker shrinks it and hands it
-      // back to be drawn; a second copy for the model when it's free.
-      bitmaps = await Promise.all([createImageBitmap(v), toModel ? createImageBitmap(v) : Promise.resolve(null)]);
-    } catch (e) {
-      console.warn("taking a camera frame failed", e);
-      this.inFlight--;
-      if (toModel) this.modelBusy = false;
-      return;
-    }
-    const [frame, full] = bitmaps;
-    if (!this.root || !this.trackWorker) {
-      bitmaps.forEach((b) => b?.close());
-      return;
-    }
-    const id = ++this.frameId;
+    const [stream, session] = [this.stream, this.session];
+    const toModel = !this.modelBusy && !!this.modelWorker && at - this.sentAt >= DETECT_EVERY;
     const strings = this.scene?.strings ?? 6;
-    if (full) {
-      // Around the neck when it's known, turned level with it and blown up so its frets
-      // show bigger (now and then the whole frame, in case it moved out); else the frame
-      // and its parts in turn.
+    // Around the neck when it's known, turned level with it and blown up so its frets show
+    // bigger (now and then the whole frame, in case it moved out); else the frame and its
+    // parts in turn.
+    let crop: Crop | null = null;
+    if (toModel) {
       const searches = searchCrops(vw, vh);
-      const crop = !this.raw
+      crop = !this.raw
         ? searches[this.searchAt++ % searches.length]
         : ++this.looks % WHOLE_EVERY === 0
           ? fullFrame(vw, vh)
           : cropAround(this.raw as unknown as Calibration, strings, vw, vh);
-      const req: NeckRequest = { id, bitmap: full, crop, strings };
+      this.modelBusy = true;
+      this.sentAt = at;
+    }
+    this.inFlight++;
+    // Shrunk on the GPU while they're taken, to no more than they're used at: the frame
+    // on screen to the canvas (and enough for the tracker); the model's copy so its crop
+    // still has every pixel the model's square can show. Recording keeps full frames.
+    const shown = this.recording ? vw : Math.min(vw, Math.max(TRACK_W, this.canvas.width));
+    const scale = crop ? modelScale(crop) : 1;
+    let bitmaps: (ImageBitmap | null)[];
+    try {
+      bitmaps = await Promise.all([
+        createImageBitmap(v, shrunk(vw, vh, shown / vw)),
+        crop ? createImageBitmap(v, shrunk(vw, vh, scale)) : Promise.resolve(null),
+      ]);
+    } catch (e) {
+      console.warn("taking a camera frame failed", e);
+      if (session === this.session) {
+        this.inFlight--;
+        if (toModel) this.modelBusy = false;
+      }
+      return;
+    }
+    const [frame, full] = bitmaps;
+    if (session !== this.session || stream !== this.stream || !this.trackWorker) {
+      // Closed, or the camera changed, while the frame was taken: it's of the old one.
+      bitmaps.forEach((b) => b?.close());
+      if (session === this.session) {
+        this.inFlight = Math.max(0, this.inFlight - 1);
+        if (toModel) this.modelBusy = false;
+      }
+      return;
+    }
+    const id = ++this.frameId;
+    if (full && crop) {
+      const req: NeckRequest = { id, bitmap: full, crop, scale, strings };
       this.modelWorker!.postMessage(req, [full]);
     }
-    this.post({ type: "frame", id, bitmap: frame!, sent: !!full, strings, at: now }, [frame!]);
+    this.post({ type: "frame", id, bitmap: frame!, width: vw, sent: !!full, strings, at }, [frame!]);
   }
 
   /** The tracker's word on a frame (or on the model's latest answer): draw. */
@@ -521,6 +590,20 @@ export class FretCam {
     }
     ctx.globalAlpha = 1;
   }
+}
+
+/** Bitmap options to shrink a vw × vh frame by `k` (≤ 1), with proper filtering. */
+function shrunk(vw: number, vh: number, k: number): ImageBitmapOptions {
+  if (k >= 1) return {};
+  return { resizeWidth: Math.max(1, Math.round(vw * k)), resizeHeight: Math.max(1, Math.round(vh * k)), resizeQuality: "high" };
+}
+
+/**
+ * How much the frame can be shrunk before the model's copy is cut out of it: as far as
+ * `crop` still maps at least one pixel to each of the model's along both sides.
+ */
+function modelScale(crop: Crop): number {
+  return Math.min(1, Math.max(MODEL_SIZE / crop.w, MODEL_SIZE / crop.h));
 }
 
 function line(ctx: CanvasRenderingContext2D, a: Pt, b: Pt): void {

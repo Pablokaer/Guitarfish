@@ -16,10 +16,12 @@ import modelUrl from "./models/frets.onnx?url";
 
 export interface NeckRequest {
   id: number;
-  /** The camera frame, full size. */
+  /** The camera frame, shrunk by `scale` (≤ 1). */
   bitmap: ImageBitmap;
   /** The part of the frame to look at, in frame pixels. */
   crop: Crop;
+  /** Bitmap pixels per frame pixel. */
+  scale: number;
   strings: number;
 }
 
@@ -46,7 +48,9 @@ async function find(req: NeckRequest): Promise<NeckResult> {
   const s = await session;
   square ??= new OffscreenCanvas(MODEL_SIZE, MODEL_SIZE).getContext("2d", { willReadFrequently: true });
   if (!square) throw new Error("no 2D canvas in the worker");
-  drawCrop(square, req.bitmap, req.crop, MODEL_SIZE);
+  const k = req.scale;
+  const crop: Crop = { cx: req.crop.cx * k, cy: req.crop.cy * k, w: req.crop.w * k, h: req.crop.h * k, angle: req.crop.angle };
+  drawCrop(square, req.bitmap, crop, MODEL_SIZE);
   req.bitmap.close();
   const input = new ort.Tensor("float32", toInput(square.getImageData(0, 0, MODEL_SIZE, MODEL_SIZE).data), [1, 3, MODEL_SIZE, MODEL_SIZE]);
   const out = (await s.run({ [s.inputNames[0]]: input }))[s.outputNames[0]];
