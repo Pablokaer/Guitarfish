@@ -13,3 +13,4 @@ app/playwright-report/
 **/.claude/worktrees/
 **/.claude/settings.local.json
 app/captures/
+app/clips/

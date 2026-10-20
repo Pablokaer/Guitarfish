@@ -1,7 +1,7 @@
+import type { ClipRecorder } from "./clip";
 import { TRACK_W, type Miss } from "./follower";
-import { cropAround, fullFrame, searchCrops, type Crop } from "./neckcrop";
+import { CropPlan, modelScale, shrunk, type Crop } from "./neckcrop";
 import { DEFAULT_CAM, fretDistance, NeckMap, parseCamSettings, type Calibration, type CamSettings, type Pt } from "./neckmap";
-import { MODEL_SIZE } from "./fretmodel";
 import type { NeckRequest, NeckResult } from "./neckworker";
 import type { TrackReply, TrackRequest } from "./trackworker";
 
@@ -11,7 +11,8 @@ import type { TrackReply, TrackRequest } from "./trackworker";
  * tracked (trackworker.ts, follower.ts). Both run off the main thread, which only takes
  * each frame (as ImageBitmaps, on the GPU) and draws it with the notes on one canvas:
  * the notes are drawn on the very frame they were tracked in, so they can't trail the
- * picture. Nothing is recorded or sent anywhere.
+ * picture. Nothing is recorded or sent anywhere (but in dev builds, on request: "Record",
+ * "Clip").
  */
 
 export interface CamDot {
@@ -42,8 +43,6 @@ export interface CamActions {
 const STORE_KEY = "tabsync.fretcam";
 /** At most this often, in ms (slower devices go as fast as the model does). */
 const DETECT_EVERY = 90;
-/** Every so many looks, the whole frame instead of the box around the neck: it may have moved out. */
-const WHOLE_EVERY = 6;
 /** Frames with the tracker at once: one being tracked, the next already taken. */
 const IN_FLIGHT = 2;
 /** Dev builds: while recording, a frame and its neck are saved this often, in ms (vite.config.ts /__capture). */
@@ -98,8 +97,7 @@ export class FretCam {
   private frameId = 0;
   /** The frame on screen, kept to redraw the notes over it. */
   private shown: ImageBitmap | null = null;
-  private looks = 0;
-  private searchAt = 0;
+  private crops = new CropPlan();
   /** Each camera request and frame loop gets a number; only the newest one may act. */
   private startGen = 0;
   private loopGen = 0;
@@ -110,6 +108,8 @@ export class FretCam {
   private accentInk = "#04140a";
   /** Dev builds: saving frames to train the model on this guitar. */
   private recording: { session: string; count: number; lastAt: number } | null = null;
+  /** Dev builds: recording a clip, to replay the neck finding offline (clip.ts, replay.ts). */
+  private clip: ClipRecorder | null = null;
   private onKey = (e: KeyboardEvent) => {
     if (e.key === "Escape") this.close();
   };
@@ -187,6 +187,7 @@ export class FretCam {
   }
 
   close(): void {
+    this.stopClip();
     this.stop();
     this.loopGen++;
     this.session++;
@@ -276,6 +277,7 @@ export class FretCam {
   private frameReady(): void {
     if (!this.video.videoWidth || !this.video.videoHeight) return;
     this.post({ type: "reset" });
+    this.clip?.reset();
     this.neck = this.raw = null;
     this.fit();
     this.renderMsg();
@@ -317,6 +319,7 @@ export class FretCam {
       this.modelBusy = false;
       const r = e.data.result;
       if (!r.ok && r.message) console.warn("fret finder", r.message);
+      this.clip?.answer(this.sentAt);
       // Timed by the frame it describes, not by when it came: a slow answer is an old one.
       this.post({ type: "answer", result: r, at: this.sentAt });
     };
@@ -371,30 +374,28 @@ export class FretCam {
   /** `at`: when the frame was taken, on this thread's clock: the tracker times the neck by it. */
   private async onFrame(at: number): Promise<void> {
     const v = this.video;
-    if (this.inFlight >= IN_FLIGHT || !this.trackWorker || !this.stream || !v.videoWidth || v.readyState < 2) return;
+    if (!this.trackWorker || !this.stream || !v.videoWidth || v.readyState < 2) return;
     const [vw, vh] = [v.videoWidth, v.videoHeight];
-    const [stream, session] = [this.stream, this.session];
-    const toModel = !this.modelBusy && !!this.modelWorker && at - this.sentAt >= DETECT_EVERY;
-    const strings = this.scene?.strings ?? 6;
-    // Around the neck when it's known, turned level with it and blown up so its frets show
-    // bigger (now and then the whole frame, in case it moved out); else the frame and its
-    // parts in turn.
-    let crop: Crop | null = null;
-    if (toModel) {
-      const searches = searchCrops(vw, vh);
-      crop = !this.raw
-        ? searches[this.searchAt++ % searches.length]
-        : ++this.looks % WHOLE_EVERY === 0
-          ? fullFrame(vw, vh)
-          : cropAround(this.raw as unknown as Calibration, strings, vw, vh);
-      this.modelBusy = true;
-      this.sentAt = at;
-    }
-    this.inFlight++;
+    const busy = this.inFlight >= IN_FLIGHT;
+    const toModel = !busy && !this.modelBusy && !!this.modelWorker && at - this.sentAt >= DETECT_EVERY;
     // Shrunk on the GPU while they're taken, to no more than they're used at: the frame
     // on screen to the canvas (and enough for the tracker); the model's copy so its crop
     // still has every pixel the model's square can show. Recording keeps full frames.
     const shown = this.recording ? vw : Math.min(vw, Math.max(TRACK_W, this.canvas.width));
+    if (this.clip) {
+      this.clip.frame(v, at, { tracked: !busy, sent: toModel, shown });
+      if (this.clip.over) this.stopClip();
+    }
+    if (busy) return;
+    const [stream, session] = [this.stream, this.session];
+    const strings = this.scene?.strings ?? 6;
+    let crop: Crop | null = null;
+    if (toModel) {
+      crop = this.crops.next(this.raw, strings, vw, vh);
+      this.modelBusy = true;
+      this.sentAt = at;
+    }
+    this.inFlight++;
     const scale = crop ? modelScale(crop) : 1;
     let bitmaps: (ImageBitmap | null)[];
     try {
@@ -477,6 +478,15 @@ export class FretCam {
     return this.neck && this.scene ? NeckMap.from(this.neck as unknown as Calibration, this.scene.strings) : null;
   }
 
+  private stopClip(): void {
+    if (!this.clip) return;
+    const clip = this.clip;
+    this.clip = null;
+    clip.stop();
+    console.info(`clip ${clip.session}: ${clip.seconds.toFixed(1)} s (npm run replay -- ${clip.session})`);
+    if (this.root) this.renderBar();
+  }
+
   private save(): void {
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify(this.settings));
@@ -500,6 +510,7 @@ export class FretCam {
         <button class="btn small" type="button" data-act="mirror" aria-pressed="${this.settings.mirror}">Mirror</button>
         <button class="btn small" type="button" data-act="flip">Switch camera</button>
         ${import.meta.env.DEV ? `<button class="btn small" type="button" data-act="record" aria-pressed="${!!this.recording}" title="Save frames to train the fret model on this guitar">${this.recording ? `Recording · ${this.recording.count}` : "Record"}</button>` : ""}
+        ${import.meta.env.DEV ? `<button class="btn small" type="button" data-act="clip" aria-pressed="${!!this.clip}" title="Record a clip to replay the neck finding offline (npm run replay)">${this.clip ? "Stop clip" : "Clip"}</button>` : ""}
         <button class="btn small primary" type="button" data-act="close">Done</button>
       </div>`;
     this.bar.querySelectorAll<HTMLButtonElement>("[data-pos]").forEach((b) => (b.onclick = () => this.act.setPosition(Number(b.dataset.pos))));
@@ -514,7 +525,20 @@ export class FretCam {
       this.recording = this.recording ? null : { session: new Date().toISOString().replace(/[:.]/g, "-"), count: 0, lastAt: 0 };
       this.renderBar();
     });
+    // Loaded only in dev builds: production has no clip code at all.
+    if (import.meta.env.DEV) {
+      this.bar.querySelector<HTMLButtonElement>("[data-act=clip]")?.addEventListener("click", async () => {
+        if (this.clip) return this.stopClip();
+        const { ClipRecorder } = await import("./clip");
+        // The tracker starts afresh with the clip, as it will when the clip is replayed.
+        this.clip = new ClipRecorder(this.scene?.strings ?? 6);
+        this.post({ type: "reset" });
+        this.neck = this.raw = null;
+        this.renderBar();
+      });
+    }
     this.bar.querySelector<HTMLButtonElement>("[data-act=flip]")!.onclick = () => {
+      this.stopClip();
       this.settings.facing = this.settings.facing === "user" ? "environment" : "user";
       this.settings.mirror = this.settings.facing === "user";
       this.save();
@@ -590,20 +614,6 @@ export class FretCam {
     }
     ctx.globalAlpha = 1;
   }
-}
-
-/** Bitmap options to shrink a vw × vh frame by `k` (≤ 1), with proper filtering. */
-function shrunk(vw: number, vh: number, k: number): ImageBitmapOptions {
-  if (k >= 1) return {};
-  return { resizeWidth: Math.max(1, Math.round(vw * k)), resizeHeight: Math.max(1, Math.round(vh * k)), resizeQuality: "high" };
-}
-
-/**
- * How much the frame can be shrunk before the model's copy is cut out of it: as far as
- * `crop` still maps at least one pixel to each of the model's along both sides.
- */
-function modelScale(crop: Crop): number {
-  return Math.min(1, Math.max(MODEL_SIZE / crop.w, MODEL_SIZE / crop.h));
 }
 
 function line(ctx: CanvasRenderingContext2D, a: Pt, b: Pt): void {

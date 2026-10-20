@@ -302,7 +302,7 @@ export class NeckFollower {
  * How far neck `a` is from neck `b`, in b's local fret spacings, at its worst on the outer
  * strings at the fret wires from `span[0]` to `span[1]` (where `a` was seen).
  */
-function offGaps(a: readonly Pt[], b: readonly Pt[], span: readonly [number, number], strings: number): number {
+export function offGaps(a: readonly Pt[], b: readonly Pt[], span: readonly [number, number], strings: number): number {
   const ma = NeckMap.from(a as unknown as Calibration, strings);
   const mb = NeckMap.from(b as unknown as Calibration, strings);
   if (!ma || !mb) return Infinity;

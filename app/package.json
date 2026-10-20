@@ -9,7 +9,8 @@
     "test": "vitest run",
     "coverage": "vitest run --coverage",
     "e2e": "playwright test",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "replay": "node scripts/replay.mjs"
   },
   "dependencies": {
     "@coderline/alphatab": "^1.8.0",
