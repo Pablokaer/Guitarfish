@@ -3672,7 +3672,7 @@ dependencies = [
 
 [[package]]
 name = "tabsync"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -3905,7 +3905,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-nowplaying"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "block2",
  "objc2-foundation",
