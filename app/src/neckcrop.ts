@@ -1,3 +1,4 @@
+import { MODEL_SIZE } from "./fretmodel";
 import { NeckMap, type Calibration, type Pt } from "./neckmap";
 
 /**
@@ -167,4 +168,39 @@ export function searchCrops(width: number, height: number): Crop[] {
     turnedFrame(width, height, -steep),
     turnedFrame(width, height, steep),
   ];
+}
+
+/** Every so many looks, the whole frame instead of the box around the neck: it may have moved out. */
+const WHOLE_EVERY = 6;
+
+/**
+ * Where the model should look next: around the neck when it's known, turned level with
+ * it and blown up so its frets show bigger (now and then the whole frame, in case it moved
+ * out); else the frame and its parts in turn (searchCrops).
+ */
+export class CropPlan {
+  private looks = 0;
+  private searchAt = 0;
+
+  next(raw: readonly Pt[] | null, strings: number, width: number, height: number): Crop {
+    if (!raw) {
+      const searches = searchCrops(width, height);
+      return searches[this.searchAt++ % searches.length];
+    }
+    return ++this.looks % WHOLE_EVERY === 0 ? fullFrame(width, height) : cropAround(raw as unknown as Calibration, strings, width, height);
+  }
+}
+
+/**
+ * How much the frame can be shrunk before the model's copy is cut out of it: as far as
+ * `crop` still maps at least one pixel to each of the model's along both sides.
+ */
+export function modelScale(crop: Crop): number {
+  return Math.min(1, Math.max(MODEL_SIZE / crop.w, MODEL_SIZE / crop.h));
+}
+
+/** Bitmap options to shrink a vw × vh frame by `k` (≤ 1), with proper filtering. */
+export function shrunk(vw: number, vh: number, k: number): ImageBitmapOptions {
+  if (k >= 1) return {};
+  return { resizeWidth: Math.max(1, Math.round(vw * k)), resizeHeight: Math.max(1, Math.round(vh * k)), resizeQuality: "high" };
 }

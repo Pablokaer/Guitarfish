@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cropAround, drawCrop, fromCrop, fullFrame, searchCrops, turnedFrame } from "../src/neckcrop";
+import { CropPlan, cropAround, drawCrop, fromCrop, fullFrame, searchCrops, turnedFrame } from "../src/neckcrop";
 import { apply, homography, planePoint, type Calibration, type Pt } from "../src/neckmap";
 
 /** A neck in a 1920×1080 frame: nut at `nut`, 12th fret `len` px away along `deg` (clockwise on screen). */
@@ -125,5 +125,18 @@ describe("drawCrop", () => {
     expect(quality(1920, 1080)).toEqual([true, "high"]);
     expect(quality(1280, 320)).toEqual([true, "high"]);
     expect(quality(480, 270)).toEqual([true, "low"]);
+  });
+});
+
+describe("CropPlan", () => {
+  it("searches the frame in turn while the neck isn't known, then looks around it, now and then at the whole frame", () => {
+    const plan = new CropPlan();
+    const searches = searchCrops(1920, 1080);
+    expect(plan.next(null, 6, 1920, 1080)).toEqual(searches[0]);
+    expect(plan.next(null, 6, 1920, 1080)).toEqual(searches[1]);
+    const cal = neck([700, 540], 300, 0);
+    const looks = Array.from({ length: 6 }, () => plan.next(cal, 6, 1920, 1080));
+    expect(looks.slice(0, 5).every((c) => c.w < 1920)).toBe(true);
+    expect(looks[5]).toEqual(fullFrame(1920, 1080));
   });
 });
