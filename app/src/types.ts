@@ -14,6 +14,12 @@ export interface Track {
   volume?: number | null;
   artworkUrl?: string | null;
   source: "os" | "local";
+  /**
+   * The service behind an "os" track: "spotify", "youtube", "youtube-music", or
+   * "browser" (media in a browser whose site the OS doesn't tell, mostly YouTube).
+   * Absent from older plugins and the local player.
+   */
+  service?: "spotify" | "youtube" | "youtube-music" | "browser" | null;
   player: string;
 }
 

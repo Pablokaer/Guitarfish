@@ -2,9 +2,9 @@ import { expect, openApp, test, WONDERWALL } from "./fixtures";
 
 test("first load shows the waiting state", async ({ page, tauri }) => {
   await openApp(page, tauri);
-  await expect(page.locator("#np-title")).toHaveText("Waiting for Spotify…");
+  await expect(page.locator("#np-title")).toHaveText("Waiting for YouTube or Spotify…");
   await expect(page.locator("#status-pill")).toContainText("Waiting for playback");
-  await expect(page.locator("#stage-empty")).toContainText("Play something on Spotify");
+  await expect(page.locator("#stage-empty")).toContainText("Play something on YouTube or Spotify");
   await expect(page.locator("#banner")).toBeHidden();
   await expect.poll(() => tauri.callsTo("plugin:nowplaying|get_now_playing").length).toBeGreaterThan(1);
   expect(tauri.callsTo("plugin:nowplaying|check_permission")).toHaveLength(1);
@@ -30,7 +30,7 @@ test("a playing track appears in the player, with its controls", async ({ page, 
 
 test("in a plain browser nothing is detected, and the app says why", async ({ page }) => {
   await openApp(page, null);
-  await expect(page.locator("#banner")).toContainText("Running in a browser: Guitarfish can't see what Spotify plays here");
-  await expect(page.locator("#np-title")).toHaveText("Waiting for Spotify…");
+  await expect(page.locator("#banner")).toContainText("Running in a browser: Guitarfish can't see what YouTube or Spotify play here");
+  await expect(page.locator("#np-title")).toHaveText("Waiting for YouTube or Spotify…");
   await expect(page.locator("#status-pill")).toContainText("Waiting for playback");
 });

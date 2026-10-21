@@ -264,7 +264,7 @@ const player = new LocalPlayer({
   onDuration: (t, ms) => void updateLocalTrack(t.id, { durationMs: ms }, false),
 });
 
-/** Spotify or the local player: what the sync loop follows, and which of them may sound. */
+/** This device's player (YouTube, Spotify) or the local one: what the sync loop follows, and which may sound. */
 const playback = new Playback({
   detector,
   local: player,
@@ -568,9 +568,17 @@ function toggleFavoriteShown() {
 }
 
 // ---- Status --------------------------------------------------------------------
+/** The service behind a track, as people call it: "YouTube", "Spotify", or the browser's name. */
+function serviceName(t: Track | null): string | null {
+  if (!t || t.source !== "os") return null;
+  const names: Record<string, string> = { youtube: "YouTube", "youtube-music": "YouTube Music", spotify: "Spotify" };
+  return (t.service && names[t.service]) || t.player.replace(/\s*\(.*\)$/, "") || null;
+}
+
 function currentStatus(): SyncStatus {
   return syncStatus({
     mode: playback.mode,
+    playerName: serviceName(sync.current),
     detectorError: detector.status.kind === "error" ? detector.status.message : null,
     hasTrack: !!sync.current,
     isPlaying: !!sync.current?.isPlaying,
@@ -621,8 +629,8 @@ function renderEmpty(s: SyncStatus) {
       text = "Pick one of your MP3s. Guitarfish finds its tablature on Songsterr and shows it here.";
       action = { label: "Open Music", run: () => setView("music") };
     } else if (s.tone !== "error") {
-      title = "Play something on Spotify";
-      text = "Guitarfish detects the song and opens its tablature from Songsterr here.";
+      title = "Play something on YouTube or Spotify";
+      text = "Guitarfish detects the song, in the YouTube app, YouTube Music, a browser or Spotify, and opens its tablature from Songsterr here.";
     }
   } else if (sync.phase === "searching") {
     iconName = "search";
@@ -680,13 +688,14 @@ function renderNowPlaying() {
   const local = playback.mode === "local";
   // The local player answers at once; Spotify only through the last poll.
   const t = local ? player.nowPlaying() : sync.current;
-  const waiting = local ? "Nothing playing" : "Waiting for Spotify…";
+  const waiting = local ? "Nothing playing" : "Waiting for YouTube or Spotify…";
   el.title.textContent = t ? t.title : waiting;
   const artist = t ? t.artist || (local ? "Unknown artist" : "") : "";
-  el.artist.textContent = t ? artist + (t.album ? ` · ${t.album}` : "") : local ? "Pick a song in Music" : "Play a song in Spotify on this device";
+  el.artist.textContent = t ? artist + (t.album ? ` · ${t.album}` : "") : local ? "Pick a song in Music" : "Play a song on YouTube or Spotify on this device";
   el.stripTitle.textContent = t ? t.title : waiting;
   el.stripArtist.textContent = artist;
   el.toolsSource.textContent = t ? t.player : "—";
+  el.toolsPlayerTitle.textContent = local ? "Local player" : (serviceName(t) ?? "YouTube · Spotify");
   el.player.dataset.playing = String(!!t?.isPlaying);
   renderArt(t?.artworkUrl ?? null);
 
@@ -695,7 +704,7 @@ function renderNowPlaying() {
   el.transport.hidden = !(local || caps.transport);
   for (const b of [el.prev, el.play, el.next]) {
     b.disabled = !controllable;
-    if (!controllable) b.title = local ? "Pick a song in Music" : t ? "Controls need Spotify on this device" : "Nothing playing";
+    if (!controllable) b.title = local ? "Pick a song in Music" : t ? "Controls need the player on this device" : "Nothing playing";
   }
   if (controllable) {
     el.prev.title = local ? "Previous (⇧←)" : "Previous track";
@@ -767,7 +776,7 @@ async function control(action: "playpause" | "next" | "previous" | "seek" | "vol
   try {
     await invoke("plugin:nowplaying|control", { action, value: value ?? null });
   } catch (e) {
-    showBanner(`Spotify didn't accept the command. <small>${escapeHtml(String(e))}</small>`, "warn");
+    showBanner(`${escapeHtml(serviceName(sync.current) ?? "The player")} didn't accept the command. <small>${escapeHtml(String(e))}</small>`, "warn");
   }
   void sync.poll();
 }
@@ -890,7 +899,7 @@ function renderLocalControls() {
   const local = playback.mode === "local";
   el.player.classList.toggle("local", local);
   el.modeSwitch.querySelectorAll<HTMLButtonElement>("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mode === playback.mode)));
-  el.toolsPlayerTitle.textContent = local ? "Local player" : "Spotify";
+  el.toolsPlayerTitle.textContent = local ? "Local player" : (serviceName(sync.current) ?? "YouTube · Spotify");
 
   el.shuffle.setAttribute("aria-pressed", String(player.shuffle));
   const repeat = player.repeat;
@@ -1653,7 +1662,7 @@ async function renderCataloguePage(message?: string) {
   }
   if (view !== "catalogue") return; // the user moved on meanwhile
   if (!songs.length && !list.childElementCount) {
-    list.innerHTML = `<li class="empty-row">No tabs yet. Import Guitar Pro, alphaTex or MusicXML files to see them in the local viewer, following Spotify.</li>`;
+    list.innerHTML = `<li class="empty-row">No tabs yet. Import Guitar Pro, alphaTex or MusicXML files to see them in the local viewer, following YouTube or Spotify.</li>`;
   }
   for (const s of songs) list.appendChild(catalogueSongRow(s));
   el.page.replaceChildren(inner);
@@ -2278,7 +2287,7 @@ async function main() {
   renderNowPlaying();
   requestAnimationFrame(tick);
   if (!isTauri()) {
-    showBanner("Running in a browser: Guitarfish can't see what Spotify plays here. Your MP3s still play in Music.");
+    showBanner("Running in a browser: Guitarfish can't see what YouTube or Spotify play here. Your MP3s still play in Music.");
   }
   await loadCapabilities();
   renderNowPlaying();

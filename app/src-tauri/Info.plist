@@ -2,9 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <!-- Shown by macOS the first time Guitarfish asks Spotify what is playing. -->
+  <!-- Shown by macOS the first time Guitarfish asks Spotify, or a browser, what is playing. -->
   <key>NSAppleEventsUsageDescription</key>
-  <string>Guitarfish asks Spotify which song is playing so it can show the matching tab.</string>
+  <string>Guitarfish asks Spotify, and your browser's YouTube tabs, which song is playing so it can show the matching tab.</string>
   <!-- Shown the first time the Solos view listens for the song's key. -->
   <key>NSMicrophoneUsageDescription</key>
   <string>Guitarfish listens to the music playing to find its key for the Solos scales. Nothing is recorded.</string>

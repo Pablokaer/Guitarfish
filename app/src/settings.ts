@@ -18,7 +18,7 @@ export interface Settings {
   soloScaleMinor: string;
   /** Solos view: label the neck with note names or scale degrees. */
   soloLabels: "notes" | "degrees";
-  /** Follow Spotify, or play local MP3 files with Guitarfish's own player. */
+  /** "spotify": follow this device's player (YouTube, YouTube Music, Spotify); "local": Guitarfish's own MP3 player. */
   playbackMode: "spotify" | "local";
   /** Bumped when a default changes meaning; see loadSettings. */
   version: number;

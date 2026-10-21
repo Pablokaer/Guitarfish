@@ -1,20 +1,27 @@
-//! Now-playing detector.
+//! Now-playing detector: Spotify, YouTube and YouTube Music, in their apps or in a
+//! browser. When several play, `sources::pick` chooses: a playing one first, and
+//! among equals YouTube.
 //!
-//! * macOS   – asks the Spotify app via AppleScript (`osascript`).
+//! * macOS   – AppleScript: the Spotify app, and the YouTube tabs of the running
+//!   browsers (`browser.rs`), whose pages report position and state when the
+//!   browser allows JavaScript from Apple Events.
 //! * Windows – Global System Media Transport Controls (SMTC), the API behind the
-//!   media overlay. Works for Spotify and other players.
-//! * Linux   – MPRIS over the D-Bus session bus (`org.mpris.MediaPlayer2.spotify`).
+//!   media overlay: Spotify, the browsers and the YouTube (Music) apps.
+//! * Linux   – MPRIS over the D-Bus session bus: Spotify, the browsers and the
+//!   YouTube Music desktop app.
 //! * Android – `MediaSessionManager` through a `NotificationListenerService`
-//!   (Kotlin, see `android/`). The user grants notification access once.
+//!   (Kotlin, see `android/`): Spotify, YouTube, YouTube Music and the browsers.
+//!   The user grants notification access once.
 //!
 //! All platforms expose the same command: `plugin:nowplaying|get_now_playing`.
-//! `control` drives Spotify (play/pause, skip, seek, volume) where the OS allows
-//! it; `get_capabilities` tells the UI which of those controls to show.
+//! `control` drives the reported player (play/pause, skip, seek, volume) where the
+//! OS allows it; `get_capabilities` tells the UI which of those controls to show.
 //!
 //! Where the OS announces changes (macOS: Spotify's distributed notification;
-//! Linux: MPRIS `PropertiesChanged`), the plugin also emits [`CHANGED_EVENT`] to the app, with no payload, and
-//! `get_capabilities` reports `events: true`. The UI should then call
-//! `get_now_playing` right away; polling stays as a fallback.
+//! Linux: MPRIS `PropertiesChanged`), the plugin also emits [`CHANGED_EVENT`] to
+//! the app, with no payload; the UI should then call `get_now_playing` right away.
+//! `get_capabilities` reports `events: true` only where every followed player
+//! signals (Linux), so the app may poll less often there.
 
 use tauri::{
     plugin::{Builder, TauriPlugin},
@@ -24,6 +31,13 @@ use tauri::{
 mod commands;
 mod error;
 pub mod models;
+// Which players count and which one wins: used by the desktop detectors (the
+// Kotlin plugin mirrors it), tested on every OS.
+#[cfg(any(test, desktop))]
+mod sources;
+// YouTube tabs in macOS browsers (AppleScript): used on macOS, tested on every OS.
+#[cfg(any(test, target_os = "macos"))]
+mod browser;
 // Pure MPRIS mapping: used by the Linux detector, tested on every OS.
 #[cfg(any(
     test,

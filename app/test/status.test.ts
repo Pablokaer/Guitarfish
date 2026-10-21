@@ -5,7 +5,7 @@ const base = { detectorError: null, hasTrack: true, isPlaying: true, phase: "idl
 
 describe("syncStatus", () => {
   it("reports Spotify errors first", () => {
-    expect(syncStatus({ ...base, detectorError: "denied", phase: "found" })).toMatchObject({ tone: "error", label: "Spotify connection error", detail: "denied" });
+    expect(syncStatus({ ...base, detectorError: "denied", phase: "found" })).toMatchObject({ tone: "error", label: "Player connection error", detail: "denied" });
   });
 
   it("waits for playback without a track", () => {
@@ -14,7 +14,9 @@ describe("syncStatus", () => {
 
   it("maps each search phase", () => {
     const label = (phase: SearchPhase) => syncStatus({ ...base, phase }).label;
-    expect(label("idle")).toBe("Connected to Spotify");
+    expect(label("idle")).toBe("Connected to the player");
+    expect(syncStatus({ ...base, playerName: "YouTube" }).label).toBe("Connected to YouTube");
+    expect(syncStatus({ ...base, hasTrack: false }).detail).toBe("Play a song on YouTube or Spotify");
     expect(label("searching")).toBe("Searching Songsterr…");
     expect(label("found")).toBe("Tablature found");
     expect(label("picked")).toBe("Tablature found");

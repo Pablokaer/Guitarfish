@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type { PlaybackCapabilities, Track } from "./types";
+import { songOf } from "./youtube";
 
 export type DetectorStatus =
   | { kind: "ok" }
@@ -7,8 +8,9 @@ export type DetectorStatus =
   | { kind: "error"; message: string };
 
 /**
- * Reads what Spotify plays on this device, through the now-playing plugin. Outside
- * the app (a plain browser) nothing is detected.
+ * Reads what plays on this device (YouTube, YouTube Music or Spotify), through the
+ * now-playing plugin. A YouTube video becomes the song it is (see youtube.ts).
+ * Outside the app (a plain browser) nothing is detected.
  */
 export class Detector {
   status: DetectorStatus = { kind: "ok" };
@@ -19,7 +21,7 @@ export class Detector {
     try {
       const r = await invoke<{ track?: Track | null }>("plugin:nowplaying|get_now_playing");
       this.status = { kind: "ok" };
-      return r.track ?? null;
+      return r.track ? songOf(r.track) : null;
     } catch (e) {
       this.status = { kind: "error", message: String(e) };
       return null;
