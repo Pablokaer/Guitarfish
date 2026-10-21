@@ -11,7 +11,7 @@ Guitarfish runs entirely on your device, with no server to install. It searches 
 
 ### First launch
 
-- **macOS:** these builds are not notarized yet. If macOS says the app is damaged or can't be opened, move it to Applications and run `xattr -cr /Applications/Guitarfish.app`, then open it again. Allow Guitarfish to control Spotify when asked.
+- **macOS:** these builds are not notarized yet. If macOS says the app is damaged or can't be opened, move it to Applications and run `xattr -cr /Applications/Guitarfish.app`, then open it again. Allow Guitarfish to control Spotify and your browser when asked. For YouTube in a browser, also turn on *Allow JavaScript from Apple Events* (Chrome and its relatives: *View → Developer*; Safari: the *Develop* menu), so Guitarfish sees where the video is.
 - **Windows:** SmartScreen may warn about an unknown publisher. Choose *More info → Run anyway*.
-- **Linux:** install the `.deb` with `sudo apt install ./Guitarfish_<version>_amd64.deb`, or make the AppImage executable (`chmod +x Guitarfish_*.AppImage`) and run it. Guitarfish reads the Spotify desktop app over MPRIS (D-Bus), so it needs no setup; the Spotify web player isn't detected.
+- **Linux:** install the `.deb` with `sudo apt install ./Guitarfish_<version>_amd64.deb`, or make the AppImage executable (`chmod +x Guitarfish_*.AppImage`) and run it. Guitarfish reads YouTube in your browser, YouTube Music and the Spotify desktop app over MPRIS (D-Bus), so it needs no setup.
 - **Android:** allow installing from your browser or file manager, then turn on *Notification access* for Guitarfish when the app asks.

@@ -1,9 +1,11 @@
 import type { Track } from "./types";
 
 /**
- * Which player Guitarfish follows: Spotify on this device (through the now-playing
- * plugin) or its own local MP3 player. Only one makes sound: switching pauses the
- * other, and so does starting a local song while Spotify plays.
+ * Which player Guitarfish follows: this device's (YouTube, YouTube Music or
+ * Spotify, through the now-playing plugin; the mode is still called "spotify") or
+ * its own local MP3 player. Only one makes sound: switching pauses the other, and
+ * so does starting a local song while the device's player plays. "Spotify" below
+ * means that player, whichever service it is.
  */
 export type PlaybackMode = "spotify" | "local";
 

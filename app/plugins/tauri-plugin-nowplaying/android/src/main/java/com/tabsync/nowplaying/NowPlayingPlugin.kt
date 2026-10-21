@@ -17,7 +17,39 @@ import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 
-private const val SPOTIFY_PACKAGE = "com.spotify.music"
+/**
+ * The service behind a media session, as `sources::Service` on desktop: the
+ * `service` field of a track, and its rank when several sessions play (YouTube first).
+ */
+private enum class Service(val id: String, val rank: Int) {
+    YOUTUBE("youtube", 3),
+    YOUTUBE_MUSIC("youtube-music", 3),
+    BROWSER("browser", 2),
+    SPOTIFY("spotify", 1),
+}
+
+private data class App(val service: Service, val name: String)
+
+/** The apps whose sessions are followed, by package. */
+private val APPS = mapOf(
+    "com.google.android.youtube" to App(Service.YOUTUBE, "YouTube"),
+    "app.revanced.android.youtube" to App(Service.YOUTUBE, "YouTube"),
+    "com.vanced.android.youtube" to App(Service.YOUTUBE, "YouTube"),
+    "org.schabi.newpipe" to App(Service.YOUTUBE, "NewPipe"),
+    "com.google.android.apps.youtube.music" to App(Service.YOUTUBE_MUSIC, "YouTube Music"),
+    "app.revanced.android.apps.youtube.music" to App(Service.YOUTUBE_MUSIC, "YouTube Music"),
+    "com.spotify.music" to App(Service.SPOTIFY, "Spotify"),
+    // Browsers: YouTube (or other media) in a tab. The session doesn't say which site.
+    "com.android.chrome" to App(Service.BROWSER, "Chrome"),
+    "com.chrome.beta" to App(Service.BROWSER, "Chrome"),
+    "org.mozilla.firefox" to App(Service.BROWSER, "Firefox"),
+    "com.brave.browser" to App(Service.BROWSER, "Brave"),
+    "com.microsoft.emmx" to App(Service.BROWSER, "Edge"),
+    "com.sec.android.app.sbrowser" to App(Service.BROWSER, "Samsung Internet"),
+    "com.opera.browser" to App(Service.BROWSER, "Opera"),
+    "com.vivaldi.browser" to App(Service.BROWSER, "Vivaldi"),
+    "com.duckduckgo.mobile.android" to App(Service.BROWSER, "DuckDuckGo"),
+)
 
 /** Arguments of `control`, the same shape as on desktop: `{ action, value }`. */
 @InvokeArg
@@ -62,8 +94,8 @@ class NowPlayingPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     /**
-     * Returns { track: {...} } for Spotify's active media session, or {} when
-     * nothing is playing / access is missing. Called by the app about once a second.
+     * Returns { track: {...} } for the followed session to report (see `chosen`),
+     * or {} when nothing is playing / access is missing. Called about once a second.
      */
     @Command
     fun getNowPlaying(invoke: Invoke) {
@@ -73,7 +105,7 @@ class NowPlayingPlugin(private val activity: Activity) : Plugin(activity) {
             return
         }
         try {
-            spotifyController()?.let { toTrack(it) }?.let { ret.put("track", it) }
+            chosen()?.let { ret.put("track", it.second) }
         } catch (e: SecurityException) {
             // Access was revoked between the check and the call: report "nothing playing".
         }
@@ -82,8 +114,8 @@ class NowPlayingPlugin(private val activity: Activity) : Plugin(activity) {
 
     /**
      * Same shape as desktop: { transport, seek, volume, events }. Transport and
-     * seek go through Spotify's MediaController, which needs notification access.
-     * Volume is the system's media stream, not Spotify's, so it isn't offered.
+     * seek go through the session's MediaController, which needs notification
+     * access. Volume is the system's media stream, not the player's, so it isn't offered.
      */
     @Command
     fun getCapabilities(invoke: Invoke) {
@@ -96,21 +128,21 @@ class NowPlayingPlugin(private val activity: Activity) : Plugin(activity) {
         invoke.resolve(ret)
     }
 
-    /** Drives Spotify through its media session. Rejects when Spotify has no session. */
+    /** Drives the session `getNowPlaying` reports. Rejects when there is none. */
     @Command
     fun control(invoke: Invoke) {
         val args = invoke.parseArgs(ControlArgs::class.java)
         if (!hasAccess()) {
-            invoke.reject("Notification access is needed to control Spotify")
+            invoke.reject("Notification access is needed to control the player")
             return
         }
         val controller = try {
-            spotifyController()
+            chosen()?.first
         } catch (e: SecurityException) {
             null
         }
         if (controller == null) {
-            invoke.reject("Spotify is not playing")
+            invoke.reject("Nothing is playing")
             return
         }
         val controls = controller.transportControls
@@ -135,20 +167,39 @@ class NowPlayingPlugin(private val activity: Activity) : Plugin(activity) {
         invoke.resolve()
     }
 
-    /** Spotify's active media session, or null. Throws SecurityException without access. */
-    private fun spotifyController(): MediaController? {
+    /**
+     * The session to report, with its track: among the followed apps' sessions
+     * that have something to show, a playing one before a paused one, then
+     * YouTube, then browsers, then Spotify; among equals the first (Android lists
+     * the most recently active first). Throws SecurityException without access.
+     */
+    private fun chosen(): Pair<MediaController, JSObject>? {
         val msm = activity.getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
         val listener = ComponentName(activity, NowPlayingListenerService::class.java)
-        return msm.getActiveSessions(listener).firstOrNull { it.packageName == SPOTIFY_PACKAGE }
+        var best: Pair<MediaController, JSObject>? = null
+        var bestScore = -1
+        for (c in msm.getActiveSessions(listener)) {
+            val app = APPS[c.packageName] ?: continue
+            val track = toTrack(c, app) ?: continue
+            val playing = c.playbackState?.state == PlaybackState.STATE_PLAYING
+            val score = (if (playing) 10 else 0) + app.service.rank
+            if (score > bestScore) {
+                best = Pair(c, track)
+                bestScore = score
+            }
+        }
+        return best
     }
 
-    private fun toTrack(c: MediaController): JSObject? {
+    private fun toTrack(c: MediaController, app: App): JSObject? {
         val m: MediaMetadata = c.metadata ?: return null
         val title = m.getString(MediaMetadata.METADATA_KEY_TITLE) ?: return null
         val artist = m.getString(MediaMetadata.METADATA_KEY_ARTIST)
             ?: m.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST)
             ?: ""
-        if (title.isBlank() || artist.isBlank()) return null // ads / unknown
+        val spotify = app.service == Service.SPOTIFY
+        // Spotify ads have no artist; a YouTube video's artist (its channel) may be missing.
+        if (title.isBlank() || (spotify && artist.isBlank())) return null
 
         val state: PlaybackState? = c.playbackState
         val isPlaying = state?.state == PlaybackState.STATE_PLAYING
@@ -156,7 +207,7 @@ class NowPlayingPlugin(private val activity: Activity) : Plugin(activity) {
         val t = JSObject()
         t.put("title", title)
         t.put("artist", artist)
-        m.getString(MediaMetadata.METADATA_KEY_ALBUM)?.let { t.put("album", it) }
+        m.getString(MediaMetadata.METADATA_KEY_ALBUM)?.takeIf { it.isNotBlank() }?.let { t.put("album", it) }
         val duration = m.getLong(MediaMetadata.METADATA_KEY_DURATION)
         if (duration > 0) t.put("durationMs", duration)
 
@@ -173,13 +224,16 @@ class NowPlayingPlugin(private val activity: Activity) : Plugin(activity) {
         t.put("isPlaying", isPlaying)
 
         // Spotify puts its URI in MEDIA_ID, e.g. "spotify:track:<id>".
-        m.getString(MediaMetadata.METADATA_KEY_MEDIA_ID)
-            ?.takeIf { it.startsWith("spotify:track:") }
-            ?.removePrefix("spotify:track:")
-            ?.let { t.put("spotifyId", it) }
+        if (spotify) {
+            m.getString(MediaMetadata.METADATA_KEY_MEDIA_ID)
+                ?.takeIf { it.startsWith("spotify:track:") }
+                ?.removePrefix("spotify:track:")
+                ?.let { t.put("spotifyId", it) }
+        }
 
         t.put("source", "os")
-        t.put("player", "Spotify (Android)")
+        t.put("player", "${app.name} (Android)")
+        t.put("service", app.service.id)
         return t
     }
 }

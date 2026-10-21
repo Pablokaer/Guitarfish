@@ -1,4 +1,4 @@
-/** Where the Spotify → Songsterr pipeline stands for the current track. */
+/** Where the player → Songsterr pipeline stands for the current track. */
 export type SearchPhase =
   | "idle" // nothing searched yet for this track
   | "paused" // automatic search is off
@@ -18,8 +18,10 @@ export interface SyncStatus {
 }
 
 export interface StatusInput {
-  /** Which player is followed; Spotify when not given. */
+  /** Which player is followed: this device's (YouTube, Spotify) when not given, or the local one. */
   mode?: "spotify" | "local";
+  /** The service of the current track, e.g. "YouTube". */
+  playerName?: string | null;
   detectorError: string | null;
   hasTrack: boolean;
   isPlaying: boolean;
@@ -30,11 +32,11 @@ export interface StatusInput {
  * One status for the whole pipeline, most important problem first. In local mode
  * Spotify isn't read, so its errors don't count.
  */
-export function syncStatus({ mode = "spotify", detectorError, hasTrack, isPlaying, phase }: StatusInput): SyncStatus {
+export function syncStatus({ mode = "spotify", playerName, detectorError, hasTrack, isPlaying, phase }: StatusInput): SyncStatus {
   const local = mode === "local";
-  if (detectorError && !local) return { tone: "error", label: "Spotify connection error", detail: detectorError };
-  if (!hasTrack) return local ? { tone: "idle", label: "Nothing playing", detail: "Play a song from Music" } : { tone: "idle", label: "Waiting for playback", detail: "Play a song in Spotify" };
-  const connected = local ? "Local player" : "Connected to Spotify";
+  if (detectorError && !local) return { tone: "error", label: "Player connection error", detail: detectorError };
+  if (!hasTrack) return local ? { tone: "idle", label: "Nothing playing", detail: "Play a song from Music" } : { tone: "idle", label: "Waiting for playback", detail: "Play a song on YouTube or Spotify" };
+  const connected = local ? "Local player" : `Connected to ${playerName || "the player"}`;
   switch (phase) {
     case "searching":
       return { tone: "busy", label: "Searching Songsterr…" };

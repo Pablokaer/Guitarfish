@@ -18,7 +18,7 @@ pub struct Track {
     /// Bare Spotify track ID (no `spotify:track:` prefix) when the OS exposes it.
     #[serde(default)]
     pub spotify_id: Option<String>,
-    /// Spotify volume, 0–100, when the OS exposes it (macOS).
+    /// Player volume, 0–100, when the OS exposes it (macOS, Linux).
     #[serde(default)]
     pub volume: Option<u8>,
     /// Album artwork URL, when the OS exposes it (macOS).
@@ -26,8 +26,12 @@ pub struct Track {
     pub artwork_url: Option<String>,
     /// "os" for device detectors.
     pub source: String,
-    /// Which player reported it, e.g. "Spotify (macOS)".
+    /// Which player reported it, e.g. "Spotify (macOS)" or "YouTube (Chrome, macOS)".
     pub player: String,
+    /// "spotify" | "youtube" | "youtube-music" | "browser" (media in a browser whose
+    /// site the OS doesn't tell): see `sources::Service`.
+    #[serde(default)]
+    pub service: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
