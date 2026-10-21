@@ -9,6 +9,8 @@
 
 Guitarfish runs entirely on your device, with no server to install. It searches Songsterr itself (that needs an internet connection), and the tabs you import (Guitar Pro, alphaTex or MusicXML: Tools sidebar → *Import tab…*) are stored on the device.
 
+It also plays your own MP3 files (*Music* in the sidebar): playlists, a speed control from 0.25× to 1.5× that keeps the pitch, and an A–B loop to practise one passage. Their tabs are found the same way as for Spotify songs.
+
 ### First launch
 
 - **macOS:** these builds are not notarized yet. If macOS says the app is damaged or can't be opened, move it to Applications and run `xattr -cr /Applications/Guitarfish.app`, then open it again. Allow Guitarfish to control Spotify when asked.

@@ -1,6 +1,6 @@
 [package]
 name = "tauri-plugin-nowplaying"
-version = "0.6.2"
+version = "0.7.0"
 edition = "2021"
 description = "Reads the currently playing track from the OS media session (macOS, Windows, Linux, Android)."
 links = "tauri-plugin-nowplaying"

@@ -1,6 +1,6 @@
 [package]
 name = "tabsync"
-version = "0.6.2"
+version = "0.7.0"
 description = "Shows the guitar tab of the song playing in Spotify."
 edition = "2021"
 
