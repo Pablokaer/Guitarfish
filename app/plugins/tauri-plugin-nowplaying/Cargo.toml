@@ -1,6 +1,6 @@
 [package]
 name = "tauri-plugin-nowplaying"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 description = "Reads the currently playing track (Spotify, YouTube, YouTube Music) from the OS (macOS, Windows, Linux, Android)."
 links = "tauri-plugin-nowplaying"
