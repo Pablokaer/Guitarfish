@@ -240,7 +240,10 @@ kbd { display: inline-block; min-width: 18px; padding: 1px 5px; border-radius: 4
 }
 .nav[data-state="compact"] { width: var(--nav-compact-w); }
 .nav[data-state="hidden"] { width: 0; border-right-color: transparent; }
-.nav-inner { width: var(--nav-w); height: 100%; display: flex; flex-direction: column; padding: 14px 12px 10px; }
+.nav-inner {
+  width: var(--nav-w); height: 100%; display: flex; flex-direction: column; padding: 14px 12px 10px;
+  overflow: hidden auto; container-type: size;
+}
 .nav[data-state="compact"] .nav-inner { width: var(--nav-compact-w); }
 .label { transition: opacity var(--t) var(--ease); white-space: nowrap; }
 .nav[data-state="compact"] .label, .nav[data-state="compact"] .recent { opacity: 0; pointer-events: none; }
@@ -278,6 +281,11 @@ kbd { display: inline-block; min-width: 18px; padding: 1px 5px; border-radius: 4
 .recent .r-title { font-size: 12.5px; }
 .recent .r-artist { font-size: 11.5px; color: var(--muted); }
 .recent .r-empty { padding: 6px 10px; color: var(--faint); font-size: 12px; }
+/* Too short for the lists to scroll on their own: everything flows into one
+   column that scrolls as a whole, so the bottom items are never clipped. */
+@container (max-height: 640px) {
+  .recent, .recent.playlists { flex: none; max-height: none; overflow: visible; }
+}
 .nav-actions { padding: 8px 0; border-top: 1px solid var(--border); }
 .nav-item:disabled { opacity: 0.6; cursor: progress; }
 .nav-item:disabled:hover { background: none; color: var(--muted); }
