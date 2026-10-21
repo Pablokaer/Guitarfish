@@ -11,6 +11,8 @@
     "nowplaying:default",
     "allow-songsterr-search",
     "allow-song-key",
+    "allow-local-audio-open",
+    "allow-local-audio-read",
     "core:webview:allow-create-webview",
     "core:webview:allow-set-webview-position",
     "core:webview:allow-set-webview-size",

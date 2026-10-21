@@ -15,6 +15,7 @@
   "dependencies": {
     "@coderline/alphatab": "^1.8.0",
     "@tauri-apps/api": "^2.10.0",
+    "@tauri-apps/plugin-dialog": "^2.8.3",
     "@tauri-apps/plugin-notification": "^2.7.0",
     "@tauri-apps/plugin-opener": "^2.5.0",
     "@tauri-apps/plugin-process": "^2.4.0",

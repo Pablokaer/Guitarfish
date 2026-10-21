@@ -13,8 +13,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-# "unstable" enables child webviews (the in-app Songsterr panel).
-tauri = { version = "2", features = ["unstable"] }
+# "unstable" enables child webviews (the in-app Songsterr panel); "protocol-asset"
+# lets the music player stream local MP3 files (src/localaudio.rs opens its scope).
+tauri = { version = "2", features = ["unstable", "protocol-asset"] }
 tauri-plugin-opener = "2"
 tauri-plugin-nowplaying = { path = "../plugins/tauri-plugin-nowplaying" }
 serde = { version = "1", features = ["derive"] }
@@ -24,10 +25,12 @@ tauri-plugin-notification = "2"
 # it needs no platform TLS or certificate store and works the same on Android.
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 
-# In-app updates. Desktop only: the updater has no Android support.
+# In-app updates (the updater has no Android support) and the music library's file
+# picker. Desktop only.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+tauri-plugin-dialog = "2"
 
 [profile.release]
 codegen-units = 1

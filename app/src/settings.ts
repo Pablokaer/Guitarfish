@@ -18,6 +18,8 @@ export interface Settings {
   soloScaleMinor: string;
   /** Solos view: label the neck with note names or scale degrees. */
   soloLabels: "notes" | "degrees";
+  /** Follow Spotify, or play local MP3 files with Guitarfish's own player. */
+  playbackMode: "spotify" | "local";
   /** Bumped when a default changes meaning; see loadSettings. */
   version: number;
 }
@@ -37,6 +39,7 @@ export function defaultSettings(): Settings {
     soloScaleMajor: "major-pentatonic",
     soloScaleMinor: "minor-pentatonic",
     soloLabels: "notes",
+    playbackMode: "spotify",
     version: VERSION,
   };
 }
@@ -56,6 +59,7 @@ export function parseSettings(raw: unknown): Settings {
   if (!scaleById(String(s.soloScaleMajor))) s.soloScaleMajor = defaults.soloScaleMajor;
   if (!scaleById(String(s.soloScaleMinor))) s.soloScaleMinor = defaults.soloScaleMinor;
   if (s.soloLabels !== "notes" && s.soloLabels !== "degrees") s.soloLabels = defaults.soloLabels;
+  if (s.playbackMode !== "spotify" && s.playbackMode !== "local") s.playbackMode = defaults.playbackMode;
   s.version = VERSION;
   return s;
 }

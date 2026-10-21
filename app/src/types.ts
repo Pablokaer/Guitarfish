@@ -1,4 +1,7 @@
-/** What the now-playing plugin reports about the Spotify app on this device. */
+/**
+ * What is playing: the Spotify app on this device, as the now-playing plugin reports
+ * it (`source: "os"`), or Guitarfish's own local MP3 player (`source: "local"`).
+ */
 export interface Track {
   title: string;
   artist: string;
@@ -10,7 +13,7 @@ export interface Track {
   /** Spotify volume 0–100 (macOS only). */
   volume?: number | null;
   artworkUrl?: string | null;
-  source: "os";
+  source: "os" | "local";
   player: string;
 }
 

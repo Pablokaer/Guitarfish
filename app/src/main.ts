@@ -1,6 +1,7 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Catalogue } from "./catalogue";
@@ -9,7 +10,16 @@ import { EmbeddedPage } from "./embed";
 import { FretCam } from "./fretcam";
 import { detectKey, scoreChroma, signatureKey } from "./key";
 import { KeyListener } from "./listen";
+import { filesFromPaths, openPaths, pickPaths, resolveTrack, usesPaths } from "./localfiles";
+import { LOCAL_SPEED_PRESETS, LocalPlayer, MAX_SPEED, MIN_SPEED, SPEED_STEP, type QueueContext } from "./localplayer";
+import { MusicLibrary, type LocalTrack, type Playlist } from "./music";
+import { fromBlobFile, importFiles, importSummary, isMp3Name, type ImportFile } from "./musicimport";
+import { formatSpeed, formatTime, playerKey, SEEK_STEP_MS, type PlayerKey } from "./musicui";
+import { MusicView } from "./musicview";
+import { Playback } from "./playback";
+import { nextRepeat } from "./queue";
 import { canLookUpKeys, lookUpSongKey } from "./songkey";
+import { escapeHtml } from "./html";
 import { hydrateIcons, icon } from "./icons";
 import {
   applyLayoutCommand,
@@ -60,6 +70,14 @@ const el = {
   prev: $<HTMLButtonElement>("btn-prev"),
   play: $<HTMLButtonElement>("btn-play"),
   next: $<HTMLButtonElement>("btn-next"),
+  shuffle: $<HTMLButtonElement>("btn-shuffle"),
+  repeat: $<HTMLButtonElement>("btn-repeat"),
+  slower: $<HTMLButtonElement>("btn-slower"),
+  speed: $<HTMLButtonElement>("btn-speed"),
+  faster: $<HTMLButtonElement>("btn-faster"),
+  loop: $<HTMLButtonElement>("btn-loop"),
+  npLoop: $("np-loop"),
+  modeSwitch: $("mode-switch"),
   volume: $("volume"),
   volumeRange: $<HTMLInputElement>("volume-range"),
   mute: $<HTMLButtonElement>("btn-mute"),
@@ -78,6 +96,8 @@ const el = {
   nav: $("nav"),
   navItems: [...document.querySelectorAll<HTMLButtonElement>(".nav-item[data-view]")],
   recent: $("recent"),
+  playlists: $("playlists"),
+  newPlaylist: $<HTMLButtonElement>("btn-new-playlist"),
   navCompact: $<HTMLButtonElement>("btn-nav-compact"),
   navHide: $<HTMLButtonElement>("btn-nav-hide"),
   navActions: $("nav-actions"),
@@ -108,11 +128,23 @@ const el = {
   // tools
   tools: $("tools"),
   toolsClose: $<HTMLButtonElement>("btn-tools-close"),
+  toolsPlayerTitle: $("tools-player-title"),
   toolsStatus: $("tools-status"),
   toolsStatusDetail: $("tools-status-detail"),
   toolsSource: $("tools-source"),
   setFollowSpotify: $<HTMLInputElement>("set-follow-spotify"),
   setAutoSearch: $<HTMLInputElement>("set-auto-search"),
+  mp3Card: $("mp3-card"),
+  mp3Speed: $<HTMLInputElement>("mp3-speed"),
+  mp3SpeedOut: $<HTMLOutputElement>("mp3-speed-out"),
+  mp3SpeedPresets: $("mp3-speed-presets"),
+  mp3LoopText: $("mp3-loop-text"),
+  mp3SetA: $<HTMLButtonElement>("mp3-set-a"),
+  mp3SetB: $<HTMLButtonElement>("mp3-set-b"),
+  mp3ClearLoop: $<HTMLButtonElement>("mp3-clear-loop"),
+  mp3Details: $<HTMLFormElement>("mp3-details"),
+  mp3Title: $<HTMLInputElement>("mp3-title"),
+  mp3Artist: $<HTMLInputElement>("mp3-artist"),
   matchInfo: $("match-info"),
   searchAgain: $<HTMLButtonElement>("btn-search-again"),
   wrong: $<HTMLButtonElement>("btn-wrong"),
@@ -186,9 +218,74 @@ function catalogue(): Promise<Catalogue> {
   return catalogueOpen;
 }
 
+// ---- Local music ---------------------------------------------------------------
+let musicOpen: Promise<MusicLibrary> | null = null;
+/** The music library (IndexedDB), opened on first use; a failed open is retried next time. */
+function music(): Promise<MusicLibrary> {
+  musicOpen ??= MusicLibrary.open().catch((e: unknown) => {
+    musicOpen = null;
+    throw e;
+  });
+  return musicOpen;
+}
+
+/** The library's tracks and playlists, read once and updated with every change. */
+let localTracks = new Map<number, LocalTrack>();
+let playlists: Playlist[] = [];
+/** Cover art object URLs by art id (null: loading or none). Kept for the session. */
+const artUrls = new Map<string, string | null>();
+
+function coverUrl(t: LocalTrack): string | null {
+  if (!t.artId) return null;
+  const id = t.artId;
+  if (artUrls.has(id)) return artUrls.get(id) ?? null;
+  artUrls.set(id, null);
+  void music()
+    .then((lib) => lib.art(id))
+    .then((blob) => {
+      if (!blob) return;
+      artUrls.set(id, URL.createObjectURL(blob));
+      musicView.refreshArt();
+      if (player.track?.artId === id) renderNowPlaying();
+    })
+    .catch((e: unknown) => console.warn("cover art unavailable", e));
+  return null;
+}
+
+/** Guitarfish's own MP3 player: one audio element, streaming the current file. */
+const player = new LocalPlayer({
+  media: document.getElementById("local-audio") as HTMLAudioElement,
+  getTrack: (id) => localTracks.get(id) ?? null,
+  resolve: async (t) => resolveTrack(t, await music()),
+  artUrl: coverUrl,
+  storage: localStorage,
+  onChange: () => onLocalChange(),
+  onError: (t, message) => showBanner(`${escapeHtml(message)}${t ? ` <small>${escapeHtml(t.fileName)}</small>` : ""}`, "warn"),
+  onDuration: (t, ms) => void updateLocalTrack(t.id, { durationMs: ms }, false),
+});
+
+/** Spotify or the local player: what the sync loop follows, and which of them may sound. */
+const playback = new Playback({
+  detector,
+  local: player,
+  pauseSpotify: async () => void (await invoke("plugin:nowplaying|control", { action: "playpause", value: null })),
+  canControlSpotify: () => isTauri() && caps.transport,
+  mode: settings.playbackMode,
+  onMode: (mode) => {
+    settings.playbackMode = mode;
+    saveSettings(settings);
+    if (mode === "spotify") void ensurePermission();
+    sync.relookup();
+    renderLocalControls();
+    renderNowPlaying();
+    renderStatus();
+    void sync.wake();
+  },
+});
+
 /** Detector polling and the tab lookup for each new track; the UI below renders it. */
 const sync = new SyncController({
-  detector,
+  detector: playback,
   catalogue: { lookup: async (t) => (await catalogue()).lookup(t) },
   songsterr: searchSongsterr,
   picks,
@@ -214,7 +311,7 @@ const sync = new SyncController({
 });
 
 // ---- State ---------------------------------------------------------------------
-type View = "tab" | "solos" | "search" | "history" | "favorites" | "catalogue" | "import";
+type View = "tab" | "solos" | "search" | "history" | "favorites" | "catalogue" | "import" | "music" | "playlist";
 type Source = "songsterr" | "local";
 
 let layout: LayoutState = loadLayout();
@@ -229,16 +326,6 @@ let volumeHoldUntil = 0; // ignore polled volume while the user drags the slider
 let lastVolume = 50;
 
 // ---- Helpers -------------------------------------------------------------------
-function fmt(ms?: number | null): string {
-  if (ms == null || ms < 0) return "–:––";
-  const s = Math.floor(ms / 1000);
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
-}
-
 function label(r: Pick<SongsterrResult, "title" | "artist">): string {
   return r.artist ? `${r.artist} – ${r.title}` : r.title;
 }
@@ -368,6 +455,7 @@ function renderStage() {
     if (b.dataset.view === view) b.setAttribute("aria-current", "page");
     else b.removeAttribute("aria-current");
   }
+  renderPlaylistsNav();
   el.solos.setAttribute("aria-pressed", String(view === "solos"));
   el.sourceSwitch.hidden = !(embed && currentSong);
   el.sourceSwitch.querySelectorAll<HTMLButtonElement>("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.source === src)));
@@ -382,6 +470,7 @@ function setView(v: View) {
   if (v === "history") renderEntryPage("history");
   if (v === "favorites") renderEntryPage("favorites");
   if (v === "catalogue") void renderCataloguePage();
+  if (v === "music") musicView.show({ kind: "library" });
   if (v === "solos") renderSolosPage();
   else fretcam.close();
   renderStage();
@@ -481,6 +570,7 @@ function toggleFavoriteShown() {
 // ---- Status --------------------------------------------------------------------
 function currentStatus(): SyncStatus {
   return syncStatus({
+    mode: playback.mode,
     detectorError: detector.status.kind === "error" ? detector.status.message : null,
     hasTrack: !!sync.current,
     isPlaying: !!sync.current?.isPlaying,
@@ -525,7 +615,12 @@ function renderEmpty(s: SyncStatus) {
   let text = s.detail ?? "";
   let action: { label: string; run: () => void } | null = null;
   if (!sync.current) {
-    if (s.tone !== "error") {
+    if (playback.mode === "local") {
+      iconName = "disc";
+      title = "Play a song from Music";
+      text = "Pick one of your MP3s. Guitarfish finds its tablature on Songsterr and shows it here.";
+      action = { label: "Open Music", run: () => setView("music") };
+    } else if (s.tone !== "error") {
       title = "Play something on Spotify";
       text = "Guitarfish detects the song and opens its tablature from Songsterr here.";
     }
@@ -539,7 +634,7 @@ function renderEmpty(s: SyncStatus) {
   } else if (sync.best && sync.current) {
     iconName = "guitar";
     title = sync.phase === "found" || sync.phase === "picked" ? "Tablature ready" : s.label;
-    text = `${label(sync.best)} · Follow Spotify is off, so the current page was left alone.`;
+    text = `${label(sync.best)} · Follow playback is off, so the current page was left alone.`;
     action = { label: "Open tab", run: () => void openSongsterr(sync.best!, "manual") };
   }
   const card = emptyCard(sync.phase === "searching" ? "busy" : s.tone, iconName, title, text);
@@ -582,35 +677,40 @@ function renderArt(url: string | null) {
 }
 
 function renderNowPlaying() {
-  const t = sync.current;
-  el.title.textContent = t ? t.title : "Waiting for Spotify…";
-  el.artist.textContent = t ? t.artist + (t.album ? ` · ${t.album}` : "") : "Play a song in Spotify on this device";
-  el.stripTitle.textContent = t ? t.title : "Waiting for Spotify…";
-  el.stripArtist.textContent = t ? t.artist : "";
+  const local = playback.mode === "local";
+  // The local player answers at once; Spotify only through the last poll.
+  const t = local ? player.nowPlaying() : sync.current;
+  const waiting = local ? "Nothing playing" : "Waiting for Spotify…";
+  el.title.textContent = t ? t.title : waiting;
+  const artist = t ? t.artist || (local ? "Unknown artist" : "") : "";
+  el.artist.textContent = t ? artist + (t.album ? ` · ${t.album}` : "") : local ? "Pick a song in Music" : "Play a song in Spotify on this device";
+  el.stripTitle.textContent = t ? t.title : waiting;
+  el.stripArtist.textContent = artist;
   el.toolsSource.textContent = t ? t.player : "—";
   el.player.dataset.playing = String(!!t?.isPlaying);
   renderArt(t?.artworkUrl ?? null);
 
   const onDevice = t?.source === "os";
-  el.transport.hidden = !caps.transport;
+  const controllable = local ? !!t || player.upNext.order.length > 0 : onDevice;
+  el.transport.hidden = !(local || caps.transport);
   for (const b of [el.prev, el.play, el.next]) {
-    b.disabled = !onDevice;
-    if (!onDevice) b.title = t ? "Controls need Spotify on this device" : "Nothing playing";
+    b.disabled = !controllable;
+    if (!controllable) b.title = local ? "Pick a song in Music" : t ? "Controls need Spotify on this device" : "Nothing playing";
   }
-  if (onDevice) {
-    el.prev.title = "Previous track";
-    el.next.title = "Next track";
+  if (controllable) {
+    el.prev.title = local ? "Previous (⇧←)" : "Previous track";
+    el.next.title = local ? "Next (⇧→)" : "Next track";
   }
   const playing = !!t?.isPlaying;
   el.play.innerHTML = icon(playing ? "pause" : "play", 18);
-  if (onDevice) el.play.title = playing ? "Pause" : "Play";
+  if (controllable) el.play.title = playing ? "Pause (Space)" : "Play (Space)";
   el.play.setAttribute("aria-label", playing ? "Pause" : "Play");
 
-  const seekable = caps.seek && onDevice && !!t?.durationMs;
+  const seekable = local ? !!t && !!player.durationMs : caps.seek && onDevice && !!t?.durationMs;
   el.progress.classList.toggle("seekable", seekable);
   el.progress.title = seekable ? "Seek" : "";
 
-  el.volume.hidden = !(caps.volume && onDevice && t?.volume != null);
+  el.volume.hidden = local ? false : !(caps.volume && onDevice && t?.volume != null);
   if (t?.volume != null && performance.now() > volumeHoldUntil) {
     el.volumeRange.value = String(t.volume);
     if (t.volume > 0) lastVolume = t.volume;
@@ -631,13 +731,18 @@ function renderTitlebar() {
   el.titlebarText.textContent = layout.focus && sync.current ? `${sync.current.title} — ${sync.current.artist}` : "Guitarfish";
 }
 
+/** While the progress bar is dragged: where it would seek to. */
+let seekPreviewMs: number | null = null;
+
 function tick() {
-  const pos = sync.livePosition();
-  const dur = sync.current?.durationMs ?? null;
+  const local = playback.mode === "local";
+  const live = local ? (player.track ? player.positionMs : null) : sync.livePosition();
+  const pos = seekPreviewMs ?? live;
+  const dur = local ? player.durationMs : (sync.current?.durationMs ?? null);
   if (sync.current && pos != null) {
     const pct = dur ? Math.min(100, (pos / dur) * 100) : 0;
-    el.pos.textContent = fmt(pos);
-    el.dur.textContent = fmt(dur);
+    el.pos.textContent = formatTime(pos);
+    el.dur.textContent = formatTime(dur);
     el.progressFill.style.width = `${pct}%`;
     el.progress.setAttribute("aria-valuenow", String(Math.round(pct)));
     const cursor = cursorSource({ player: viewer.player.state, spotifyPlaying: sync.current.isPlaying, follow: settings.follow });
@@ -646,8 +751,14 @@ function tick() {
     }
   } else {
     el.pos.textContent = "–:––";
-    el.dur.textContent = fmt(dur);
+    el.dur.textContent = formatTime(dur);
     el.progressFill.style.width = "0%";
+  }
+  if (local && live != null && sync.current == null) {
+    // Restored but not playing yet: the sync loop has no track, show the player's.
+    el.pos.textContent = formatTime(pos);
+    el.dur.textContent = formatTime(dur);
+    el.progressFill.style.width = dur ? `${Math.min(100, ((pos ?? 0) / dur) * 100)}%` : "0%";
   }
   requestAnimationFrame(tick);
 }
@@ -666,32 +777,65 @@ async function loadCapabilities() {
   caps = await detector.capabilities();
 }
 
+/** Play/pause of the player in use. */
+function togglePlayback() {
+  if (playback.mode === "local") return toggleLocal();
+  if (sync.current) {
+    // Optimistic, so the button reacts before the next poll.
+    sync.patchCurrent({ positionMs: sync.livePosition(), isPlaying: !sync.current.isPlaying });
+    renderNowPlaying();
+  }
+  void control("playpause");
+}
+
+function seekTo(ms: number) {
+  if (playback.mode === "local") return player.seek(ms);
+  sync.patchCurrent({ positionMs: ms });
+  void control("seek", ms);
+}
+
 function bindPlayer() {
-  el.play.onclick = () => {
-    if (sync.current) {
-      // Optimistic, so the button reacts before the next poll.
-      sync.patchCurrent({ positionMs: sync.livePosition(), isPlaying: !sync.current.isPlaying });
-      renderNowPlaying();
-    }
-    void control("playpause");
-  };
-  el.prev.onclick = () => void control("previous");
-  el.next.onclick = () => void control("next");
-  el.progress.onclick = (ev) => {
-    if (!el.progress.classList.contains("seekable") || !sync.current?.durationMs) return;
-    const r = el.progress.getBoundingClientRect();
-    const ms = Math.round(((ev.clientX - r.left) / r.width) * sync.current.durationMs);
-    sync.patchCurrent({ positionMs: ms });
-    void control("seek", ms);
+  el.play.onclick = togglePlayback;
+  el.prev.onclick = () => (playback.mode === "local" ? void startLocal(() => player.previous()) : void control("previous"));
+  el.next.onclick = () => (playback.mode === "local" ? void startLocal(() => player.next()) : void control("next"));
+  // Click or drag along the bar to seek; the local player follows while dragging.
+  el.progress.onpointerdown = (ev) => {
+    const dur = playback.mode === "local" ? player.durationMs : sync.current?.durationMs;
+    if (!el.progress.classList.contains("seekable") || !dur || ev.button !== 0) return;
+    ev.preventDefault();
+    el.progress.setPointerCapture(ev.pointerId);
+    el.progress.classList.add("dragging");
+    const at = (x: number) => {
+      const r = el.progress.getBoundingClientRect();
+      return Math.round(Math.min(1, Math.max(0, (x - r.left) / r.width)) * dur);
+    };
+    seekPreviewMs = at(ev.clientX);
+    // The local player follows the drag, at most every 100 ms and without saving.
+    let lastScrub = 0;
+    el.progress.onpointermove = (e) => {
+      seekPreviewMs = at(e.clientX);
+      if (playback.mode !== "local" || e.timeStamp - lastScrub < 100) return;
+      lastScrub = e.timeStamp;
+      player.seek(seekPreviewMs, false);
+    };
+    el.progress.onpointerup = el.progress.onpointercancel = (e) => {
+      el.progress.onpointermove = el.progress.onpointerup = el.progress.onpointercancel = null;
+      el.progress.classList.remove("dragging");
+      const ms = e.type === "pointercancel" ? null : at(e.clientX);
+      seekPreviewMs = null;
+      if (ms != null) seekTo(ms);
+    };
   };
   let volTimer = 0;
   el.volumeRange.oninput = () => {
     volumeHoldUntil = performance.now() + 1500;
     renderVolume();
+    if (playback.mode === "local") return player.setVolume(Number(el.volumeRange.value));
     clearTimeout(volTimer);
     volTimer = window.setTimeout(() => void control("volume", Number(el.volumeRange.value)), 120);
   };
   el.mute.onclick = () => {
+    if (playback.mode === "local") return player.toggleMute();
     const v = Number(el.volumeRange.value);
     if (v > 0) lastVolume = v;
     el.volumeRange.value = String(v > 0 ? 0 : lastVolume || 50);
@@ -699,10 +843,413 @@ function bindPlayer() {
     renderVolume();
     void control("volume", Number(el.volumeRange.value));
   };
+  el.shuffle.onclick = () => player.setShuffle(!player.shuffle);
+  el.repeat.onclick = () => player.setRepeat(nextRepeat(player.repeat));
+  el.slower.onclick = () => player.setSpeed(player.speed - SPEED_STEP);
+  el.faster.onclick = () => player.setSpeed(player.speed + SPEED_STEP);
+  el.speed.onclick = () => player.setSpeed(1);
+  el.loop.onclick = () => player.cycleLoop();
+  el.modeSwitch.querySelectorAll<HTMLButtonElement>("button").forEach((b) => {
+    b.onclick = () => void playback.setMode(b.dataset.mode === "local" ? "local" : "spotify");
+  });
   el.playerCollapse.onclick = () => dispatch("player");
   el.playerExpand.onclick = () => dispatch("player");
   el.playerShow.onclick = () => dispatch("player-hide");
   el.exitFocus.onclick = () => dispatch("exit-focus");
+}
+
+// ---- Local player ---------------------------------------------------------------
+/** The player changed (track, state, speed, loop…): update what shows it, and the sync loop. */
+function onLocalChange() {
+  renderLocalControls();
+  if (playback.mode !== "local") return;
+  renderNowPlaying();
+  if (view === "music" || view === "playlist") musicView.refreshPlaying();
+  void sync.wake();
+}
+
+/** Starts local playback (switching to local mode and quieting Spotify) with `run`. */
+async function startLocal(run: () => Promise<void>) {
+  void playback.beforeLocalPlay();
+  await run();
+}
+
+function toggleLocal() {
+  if (player.playing) player.pause();
+  // Nothing to play: leave Spotify alone too.
+  else if (player.track || player.upNext.order.length) void startLocal(() => player.play());
+}
+
+async function playLocal(ids: number[], start: number, context: QueueContext, opts: { shuffle?: boolean } = {}) {
+  if (opts.shuffle && !player.shuffle) player.setShuffle(true);
+  await startLocal(() => player.playList(ids, start, context));
+}
+
+/** The player's speed, shuffle, repeat and loop controls, and the MP3 practice card. */
+function renderLocalControls() {
+  const local = playback.mode === "local";
+  el.player.classList.toggle("local", local);
+  el.modeSwitch.querySelectorAll<HTMLButtonElement>("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mode === playback.mode)));
+  el.toolsPlayerTitle.textContent = local ? "Local player" : "Spotify";
+
+  el.shuffle.setAttribute("aria-pressed", String(player.shuffle));
+  const repeat = player.repeat;
+  el.repeat.innerHTML = icon(repeat === "one" ? "repeatOne" : "repeat", 16);
+  el.repeat.setAttribute("aria-pressed", String(repeat !== "off"));
+  el.repeat.title = el.repeat.ariaLabel = `Repeat: ${repeat === "off" ? "off" : repeat === "all" ? "all" : "this song"}`;
+
+  const speed = player.speed;
+  el.speed.textContent = formatSpeed(speed);
+  el.speed.classList.toggle("changed", speed !== 1);
+  el.slower.disabled = speed <= MIN_SPEED;
+  el.faster.disabled = speed >= MAX_SPEED;
+
+  const { a, b } = player.loop;
+  el.loop.setAttribute("aria-pressed", String(a != null));
+  el.loop.classList.toggle("looping", a != null && b != null);
+  el.loop.textContent = a != null && b == null ? "A–…" : "A–B";
+  el.loop.title = a == null ? "A–B loop: set A here (L)" : b == null ? `Loop from ${formatTime(a)}: set B here (L)` : `Looping ${formatTime(a)}–${formatTime(b)}: click to stop (L)`;
+  const dur = player.durationMs;
+  el.npLoop.hidden = !(local && a != null && dur);
+  if (!el.npLoop.hidden && dur) {
+    el.npLoop.style.left = `${(a! / dur) * 100}%`;
+    el.npLoop.style.width = b != null ? `${((b - a!) / dur) * 100}%` : "2px";
+  }
+
+  const t = player.track;
+  el.mp3Card.hidden = !local || !t;
+  el.mp3Speed.value = String(speed);
+  el.mp3SpeedOut.textContent = formatSpeed(speed);
+  setFill(el.mp3Speed);
+  el.mp3SpeedPresets.querySelectorAll<HTMLButtonElement>("button").forEach((btn) => btn.setAttribute("aria-pressed", String(Number(btn.dataset.speed) === speed)));
+  el.mp3LoopText.textContent = a == null ? "Off" : b == null ? `From ${formatTime(a)}…` : `${formatTime(a)} → ${formatTime(b)}`;
+  el.mp3ClearLoop.disabled = a == null;
+  if (t && el.mp3Details.dataset.track !== String(t.id) && !el.mp3Details.contains(document.activeElement)) {
+    el.mp3Details.dataset.track = String(t.id);
+    el.mp3Title.value = t.title;
+    el.mp3Artist.value = t.artist;
+  }
+}
+
+function bindLocalPlayer() {
+  el.mp3SpeedPresets.replaceChildren(
+    ...LOCAL_SPEED_PRESETS.map((v) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.dataset.speed = String(v);
+      b.textContent = `${v}×`;
+      b.onclick = () => player.setSpeed(v);
+      return b;
+    }),
+  );
+  el.mp3Speed.oninput = () => {
+    el.mp3SpeedOut.textContent = formatSpeed(Number(el.mp3Speed.value));
+    setFill(el.mp3Speed);
+    player.setSpeed(Number(el.mp3Speed.value));
+  };
+  el.mp3SetA.onclick = () => player.setLoop(player.positionMs, player.loop.b != null && player.loop.b > player.positionMs ? player.loop.b : null);
+  el.mp3SetB.onclick = () => {
+    const a = player.loop.a ?? 0;
+    player.setLoop(a, player.positionMs);
+    if (player.loop.b != null) player.seek(a);
+  };
+  el.mp3ClearLoop.onclick = () => player.clearLoop();
+  el.mp3Details.onsubmit = (e) => {
+    e.preventDefault();
+    const t = player.track;
+    const title = el.mp3Title.value.trim();
+    if (!t || !title) return;
+    void updateLocalTrack(t.id, { title, artist: el.mp3Artist.value.trim() });
+  };
+  // Keep the queue, track and position when the window closes.
+  window.addEventListener("pagehide", () => player.save());
+}
+
+/**
+ * Runs a player key; false when it doesn't apply. The keys drive the local player
+ * only: in Spotify mode Space and the arrows keep scrolling the page, as they always did.
+ */
+function runPlayerKey(k: PlayerKey): boolean {
+  if (playback.mode === "local") {
+    if (!player.track && (k !== "toggle" || !player.upNext.order.length)) return false;
+    const pos = player.positionMs;
+    const actions: Record<PlayerKey, () => void> = {
+      toggle: toggleLocal,
+      back: () => player.seek(pos - SEEK_STEP_MS),
+      forward: () => player.seek(pos + SEEK_STEP_MS),
+      previous: () => void startLocal(() => player.previous()),
+      next: () => void startLocal(() => player.next()),
+      slower: () => player.setSpeed(player.speed - SPEED_STEP),
+      faster: () => player.setSpeed(player.speed + SPEED_STEP),
+      "normal-speed": () => player.setSpeed(1),
+      loop: () => player.cycleLoop(),
+      mute: () => player.toggleMute(),
+    };
+    actions[k]();
+    return true;
+  }
+  return false;
+}
+
+// ---- Music library and playlists ------------------------------------------------------
+const musicView = new MusicView({
+  root: el.page,
+  tracks: () => [...localTracks.values()],
+  playlists: () => playlists,
+  artUrl: coverUrl,
+  playingId: () => player.track?.id ?? null,
+  isPlaying: () => player.playing,
+  picker: usesPaths() ? "dialog" : "input",
+  pickFiles: () => void pickAndImport(),
+  importFiles: (files) => void runImport(files.map(fromBlobFile)),
+  play: (ids, start, context, opts) => void playLocal(ids, start, context, opts),
+  togglePlay: toggleLocal,
+  updateTrack: (id, patch) => updateLocalTrack(id, patch),
+  removeTrack: (id) => removeLocalTrack(id),
+  addToPlaylist: (pid, ids) => addToPlaylist(pid, ids),
+  renamePlaylist: (id, name) => renamePlaylist(id, name),
+  deletePlaylist: (id) => deletePlaylist(id),
+  removeFromPlaylist: (id, trackId) => editPlaylist(id, (lib) => lib.removeFromPlaylist(id, trackId)),
+  reorderPlaylist: (id, from, to) => editPlaylist(id, (lib) => lib.reorderPlaylist(id, from, to)),
+  storage: localStorage,
+});
+
+function renderMusic() {
+  if (view === "music" || view === "playlist") musicView.render();
+}
+
+/** Reads the library's tracks and playlists again. */
+async function loadMusic() {
+  const lib = await music();
+  const [tracks, lists] = await Promise.all([lib.tracks(), lib.playlists()]);
+  localTracks = new Map(tracks.map((t) => [t.id, t]));
+  playlists = lists;
+  renderPlaylistsNav();
+  renderMusic();
+}
+
+function openPlaylist(id: number, rename = false) {
+  view = "playlist";
+  fretcam.close();
+  musicView.show({ kind: "playlist", id }, { rename });
+  renderStage();
+}
+
+function renderPlaylistsNav() {
+  const ctx = player.context;
+  const current = view === "playlist" && musicView.page.kind === "playlist" ? musicView.page.id : null;
+  el.playlists.replaceChildren(
+    ...(playlists.length
+      ? playlists.map((p) => {
+          const li = document.createElement("li");
+          const b = document.createElement("button");
+          b.type = "button";
+          b.title = p.name;
+          const playing = ctx?.kind === "playlist" && ctx.id === p.id && playback.mode === "local";
+          b.innerHTML = `<span class="r-title">${escapeHtml(p.name)}</span><span class="r-artist">${p.trackIds.length} ${p.trackIds.length === 1 ? "song" : "songs"}${playing ? " · playing" : ""}</span>`;
+          if (current === p.id) b.setAttribute("aria-current", "true");
+          b.onclick = () => openPlaylist(p.id);
+          li.appendChild(b);
+          return li;
+        })
+      : [Object.assign(document.createElement("li"), { className: "r-empty", textContent: "Group songs to practise with +." })]),
+  );
+}
+
+/** "Playlist 1", "Playlist 2"…: the first name not taken. */
+function newPlaylistName(): string {
+  const taken = new Set(playlists.map((p) => p.name.toLowerCase()));
+  let n = playlists.length + 1;
+  while (taken.has(`playlist ${n}`)) n++;
+  return `Playlist ${n}`;
+}
+
+async function createPlaylist(trackIds: number[] = []): Promise<Playlist | null> {
+  try {
+    const p = await (await music()).createPlaylist(newPlaylistName(), trackIds);
+    playlists = [...playlists, p];
+    renderPlaylistsNav();
+    return p;
+  } catch (e) {
+    showBanner(`Couldn't create the playlist: ${escapeHtml(String(e))}`, "warn");
+    return null;
+  }
+}
+
+/** Runs a change of playlist `id` and shows its result; the queue follows when it plays that playlist. */
+async function editPlaylist(id: number, run: (lib: MusicLibrary) => Promise<Playlist | null>): Promise<void> {
+  try {
+    const p = await run(await music());
+    if (!p) return;
+    playlists = playlists.map((x) => (x.id === id ? p : x));
+    player.listChanged({ kind: "playlist", id }, p.trackIds);
+    renderPlaylistsNav();
+    renderMusic();
+  } catch (e) {
+    showBanner(`Couldn't change the playlist: ${escapeHtml(String(e))}`, "warn");
+  }
+}
+
+async function addToPlaylist(playlistId: number | null, trackIds: number[]) {
+  const names = trackIds.map((id) => localTracks.get(id)?.title ?? "").filter(Boolean);
+  const what = names.length === 1 ? `“${names[0]}”` : `${names.length} songs`;
+  if (playlistId == null) {
+    const p = await createPlaylist(trackIds);
+    if (p) musicView.setMessage({ text: `Added ${what} to the new playlist “${p.name}”.`, tone: "info" });
+    return;
+  }
+  let added = 0;
+  await editPlaylist(playlistId, async (lib) => {
+    const r = await lib.addToPlaylist(playlistId, trackIds);
+    added = r.added;
+    return r.playlist;
+  });
+  const name = playlists.find((p) => p.id === playlistId)?.name ?? "the playlist";
+  musicView.setMessage({ text: added ? `Added ${what} to “${name}”.` : `${what} is already in “${name}”.`, tone: "info" });
+}
+
+async function renamePlaylist(id: number, name: string) {
+  await editPlaylist(id, (lib) => lib.renamePlaylist(id, name));
+}
+
+async function deletePlaylist(id: number) {
+  try {
+    await (await music()).deletePlaylist(id);
+    playlists = playlists.filter((p) => p.id !== id);
+    player.contextDeleted({ kind: "playlist", id });
+    setView("music");
+  } catch (e) {
+    showBanner(`Couldn't delete the playlist: ${escapeHtml(String(e))}`, "warn");
+  }
+}
+
+/** Saves a track's details; a new title or artist looks its tab up again. */
+async function updateLocalTrack(id: number, patch: Partial<Pick<LocalTrack, "title" | "artist" | "album" | "durationMs">>, rerender = true) {
+  try {
+    const t = await (await music()).updateTrack(id, patch);
+    if (!t) return;
+    localTracks.set(id, t);
+    if (rerender) renderMusic();
+    if (player.track?.id === id) {
+      delete el.mp3Details.dataset.track;
+      renderLocalControls();
+      renderNowPlaying();
+      void sync.wake();
+    }
+  } catch (e) {
+    showBanner(`Couldn't save the song's details: ${escapeHtml(String(e))}`, "warn");
+  }
+}
+
+async function removeLocalTrack(id: number) {
+  const t = localTracks.get(id);
+  try {
+    await (await music()).removeTrack(id);
+    player.trackRemoved(id);
+    await loadMusic();
+    if (t) musicView.setMessage({ text: `Removed “${t.title}” from your library.${t.path ? " The file itself wasn't touched." : ""}`, tone: "info" });
+  } catch (e) {
+    showBanner(`Couldn't remove the song: ${escapeHtml(String(e))}`, "warn");
+  }
+}
+
+let importRunning = false;
+
+/**
+ * Imports files into the library and reports what happened. Songs dropped or
+ * picked while a playlist is open also go into that playlist.
+ */
+async function runImport(files: ImportFile[], refused: { name: string; reason: string }[] = []) {
+  if (importRunning) {
+    musicView.setMessage({ text: "An import is already running. Add more files when it's done.", tone: "warn" });
+    return;
+  }
+  importRunning = true;
+  const intoPlaylist = view === "playlist" && musicView.page.kind === "playlist" ? musicView.page.id : null;
+  if (view !== "music" && view !== "playlist") setView("music");
+  musicView.setImporting({ done: 0, total: files.length });
+  try {
+    const out = await importFiles(files, await music(), {
+      onProgress: (done, total) => musicView.setImporting({ done, total }),
+      exists: usesPaths() ? async (path) => !(await openPaths([path]))[0]?.error : undefined,
+    });
+    out.failed.unshift(...refused);
+    musicView.setImporting(null);
+    await loadMusic();
+    // Into the open playlist: new songs and those already in the library alike.
+    const ids = [...out.added, ...out.existing].map((t) => t.id);
+    if (intoPlaylist != null && ids.length) {
+      await editPlaylist(intoPlaylist, async (lib) => (await lib.addToPlaylist(intoPlaylist, ids)).playlist);
+    }
+    musicView.setMessage({ text: importSummary(out), tone: out.failed.length ? "warn" : "info" });
+  } catch (e) {
+    musicView.setImporting(null);
+    musicView.setMessage({ text: `Couldn't open the music library on this device: ${String(e)}`, tone: "warn" });
+  } finally {
+    importRunning = false;
+  }
+}
+
+/** Desktop: the system file picker, then the import. */
+async function pickAndImport() {
+  try {
+    const paths = await pickPaths();
+    if (paths.length) await importPaths(paths);
+  } catch (e) {
+    showBanner(`Couldn't open the file picker: ${escapeHtml(String(e))}`, "warn");
+  }
+}
+
+async function importPaths(paths: string[]) {
+  try {
+    const { files, failed } = await filesFromPaths(paths);
+    await runImport(files, failed);
+  } catch (e) {
+    showBanner(`Couldn't read the files: ${escapeHtml(String(e))}`, "warn");
+  }
+}
+
+/**
+ * Dropping MP3 files on the window imports them. The desktop app gets the files'
+ * paths from the window (Tauri handles the drop); a browser gets the files.
+ */
+function bindMusicDrops() {
+  el.newPlaylist.onclick = async () => {
+    const p = await createPlaylist();
+    if (p) openPlaylist(p.id, true);
+  };
+  if (usesPaths()) {
+    void getCurrentWebview()
+      .onDragDropEvent((e) => {
+        const ev = e.payload;
+        if (ev.type === "enter") musicView.setDropping(ev.paths.some(isMp3Name));
+        else if (ev.type === "leave") musicView.setDropping(false);
+        else if (ev.type === "drop") {
+          musicView.setDropping(false);
+          if (!ev.paths.length) return;
+          if (!ev.paths.some(isMp3Name)) return showBanner("Only MP3 files can be added to the music library.", "warn");
+          void importPaths(ev.paths);
+        }
+      })
+      .catch((e: unknown) => console.warn("file drops unavailable", e));
+    return;
+  }
+  const hasFiles = (e: DragEvent) => !!e.dataTransfer?.types.includes("Files");
+  document.addEventListener("dragover", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    musicView.setDropping(true);
+  });
+  document.addEventListener("dragleave", (e) => {
+    if (!e.relatedTarget) musicView.setDropping(false);
+  });
+  document.addEventListener("drop", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    musicView.setDropping(false);
+    const files = [...(e.dataTransfer?.files ?? [])];
+    if (files.length) void runImport(files.map(fromBlobFile));
+  });
 }
 
 // ---- Local catalogue (alphaTab) -------------------------------------------------
@@ -1562,6 +2109,12 @@ function bindChrome() {
       dispatch("exit-focus");
       return;
     }
+    const pk = playerKey(e, e.target as HTMLElement | null);
+    // Held keys repeat seeking and speed steps, never a toggle.
+    if (pk && !(e.repeat && (pk === "toggle" || pk === "loop" || pk === "mute")) && runPlayerKey(pk)) {
+      e.preventDefault();
+      return;
+    }
     if (nativeMac || !(e.metaKey || e.ctrlKey) || e.altKey) return;
     const shift = e.shiftKey;
     let cmd: string | null = null;
@@ -1597,6 +2150,8 @@ function renderAll() {
 
 // ---- Permission (Android) ----------------------------------------------------
 async function ensurePermission(): Promise<void> {
+  // The local player needs no access to other apps.
+  if (playback.mode === "local") return;
   const waited = await detector.waitForPermission(() => {
     const box = document.createElement("div");
     box.className = "page-inner";
@@ -1708,13 +2263,22 @@ async function main() {
   bindPlayer();
   bindTools();
   bindPractice();
+  bindLocalPlayer();
+  bindMusicDrops();
   bindChrome();
   renderLayout();
+  try {
+    await loadMusic();
+  } catch (e) {
+    console.warn("music library unavailable", e);
+  }
+  player.restore();
+  renderLocalControls();
   renderAll();
   renderNowPlaying();
   requestAnimationFrame(tick);
   if (!isTauri()) {
-    showBanner("Running in a browser: Guitarfish can't see what Spotify plays here. Use the desktop or Android app.");
+    showBanner("Running in a browser: Guitarfish can't see what Spotify plays here. Your MP3s still play in Music.");
   }
   await loadCapabilities();
   renderNowPlaying();

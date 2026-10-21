@@ -19,6 +19,12 @@ describe("parseSettings", () => {
     expect(parseSettings({ version: 2, theme: "neon" }).theme).toBe("graphite");
   });
 
+  it("follows Spotify until the local player is chosen", () => {
+    expect(parseSettings(null).playbackMode).toBe("spotify");
+    expect(parseSettings({ version: 2, playbackMode: "local" }).playbackMode).toBe("local");
+    expect(parseSettings({ version: 2, playbackMode: "radio" }).playbackMode).toBe("spotify");
+  });
+
   it("forgets settings that no longer exist (tab server, Web API fallback, library sync)", () => {
     const s = parseSettings({ version: 2, zoom: 1.2, serverUrl: "http://192.168.1.20:8787", spotifyFallback: true, librarySync: false });
     expect(s).toEqual({ ...defaultSettings(), zoom: 1.2 });

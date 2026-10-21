@@ -11,6 +11,8 @@
 
 Guitarfish runs alongside Spotify. When the song changes, it detects the new track, finds a guitar tab for it and shows it: either the song's page on [Songsterr](https://www.songsterr.com) (desktop) or a tab you imported, rendered locally and scrolled in time with the song.
 
+It also plays your own MP3 files: a music library with playlists, a speed control from 0.25× to 1.5× that keeps the pitch, and an A–B loop for practising one passage. Those songs get their tabs the same way as Spotify songs.
+
 Everything runs on your device. There is no server to install: the app searches Songsterr itself, and your imported tabs are stored on the device. For the Solos view it also looks up each song's key online (title, artist and Spotify track id are sent to Deezer and ReccoBeats).
 
 | Platform | How it detects the song | Status |
@@ -30,6 +32,7 @@ Everything runs on your device. There is no server to install: the app searches 
 - [1. Desktop app (macOS, Windows, Linux)](#1-desktop-app-macos-windows-linux)
 - [2. Android app](#2-android-app)
 - [3. Your own tabs](#3-your-own-tabs)
+- [Your MP3s: the local player](#your-mp3s-the-local-player)
 - [4. Songsterr](#4-songsterr)
 - [Solos: scales in the song's key](#solos-scales-in-the-songs-key)
 - [5. Tests, CI and releases](#5-tests-ci-and-releases)
@@ -44,6 +47,7 @@ Everything runs on your device. There is no server to install: the app searches 
 | Tab rendering | [alphaTab](https://alphatab.net) (`@coderline/alphatab` + its Vite plugin) | Renders alphaTex, Guitar Pro 3–7 and MusicXML, and plays them with its built-in synthesizer (practice tools). Guitarfish adds bar-follow on top, using alphaTab's play order. |
 | Song detection | Custom Tauri plugin `tauri-plugin-nowplaying` | Rust on desktop (AppleScript and an `objc2` notification observer on macOS, the `windows` crate's WinRT SMTC bindings on Windows, `zbus` MPRIS on Linux), Kotlin on Android. |
 | Songsterr search | `songsterr_search` command in the Rust shell, [`ureq`](https://crates.io/crates/ureq) with rustls (ring) and bundled webpki roots | Calls Songsterr's public search; the webview can't (no CORS). Same code on desktop and Android, no platform TLS needed. |
+| Local MP3 player | `<audio>` element, `preservesPitch`; `tauri-plugin-dialog` and the asset protocol (desktop) | Streams MP3 files from disk (desktop) or from a copy in IndexedDB (Android, browser). Speed changes use the webview's own pitch-preserving time stretching, so nothing is decoded into memory. ID3 tags and the duration are read in TypeScript (`mp3meta.ts`), with no dependency. |
 | Tab catalogue | IndexedDB in the webview | Your imported songs, tab files and confirmed Spotify tracks, on the device. Matching (normalization + trigram similarity) runs in TypeScript. |
 | External links | `@tauri-apps/plugin-opener` | Opens pages in the system browser (Songsterr on Android, fallbacks). |
 | Notifications | `@tauri-apps/plugin-notification` | System notification when a new release is out. |
@@ -80,9 +84,10 @@ Guitarfish is one program. The only network traffic is the Songsterr search (and
 
 ### The app
 
-- **Rust shell** (`app/src-tauri/src/lib.rs`) registers the plugins (`opener`, `notification`, `nowplaying`, and on desktop `updater` and `process`) and the `songsterr_search` command. On macOS it also adds a *Layout* menu. The menu's keyboard shortcuts keep working while the Songsterr page has focus; the shell forwards each one to the UI as a `layout-command` event.
+- **Rust shell** (`app/src-tauri/src/lib.rs`) registers the plugins (`opener`, `notification`, `nowplaying`, and on desktop `updater`, `process` and `dialog`) and the `songsterr_search`, `song_key`, `local_audio_open` and `local_audio_read` commands. On macOS it also adds a *Layout* menu. The menu's keyboard shortcuts keep working while the Songsterr page has focus; the shell forwards each one to the UI as a `layout-command` event.
 - **Songsterr search** (`app/src-tauri/src/songsterr.rs`): `songsterr_search(query) -> Vec<SongsterrResult>` calls `https://www.songsterr.com/api/songs?pattern=…&size=5` with a 5-second timeout, HTTPS only, on a blocking thread. It drops results Songsterr flags as junk, lists each song's instruments once, and returns `{ songId, title, artist, instruments, url }` with the stable link `https://www.songsterr.com/a/wa/song?id=…`. No tab content is fetched. The command is declared in the app manifest (`build.rs`), so it needs the `allow-songsterr-search` permission, which only the main window has (`capabilities/default.json`): the Songsterr pages in child webviews can't call it.
 - **Key lookup** (`app/src-tauri/src/songkey.rs`): `song_key(title, artist, spotifyId?) -> Option<{ tonic, mode, tempo, via }>` asks `https://api.reccobeats.com/v1/audio-features?ids=…` by Spotify track id; failing that, it searches `https://api.deezer.com/search` for the title and artist, keeps the matching recordings' ISRCs (same title and artist, no live/remix/… versions) and asks ReccoBeats by ISRC. 6-second timeout, HTTPS only, no API keys. Same permission scheme: `allow-song-key`, main window only.
+- **Local files** (`app/src-tauri/src/localaudio.rs`): `local_audio_open(paths) -> Vec<{ path, name, size, error }>` checks that each path is a readable `.mp3` file and lets the asset protocol serve it. The protocol is enabled in `tauri.conf.json` with an empty scope, so it can serve only the files opened this way. `local_audio_read(path, offset, len)` returns up to 32 MB of an opened file as raw bytes; the import reads the ID3 tag this way. Nothing is ever written. Same permission scheme: `allow-local-audio-open` and `allow-local-audio-read`, main window only.
 - **Now-playing plugin** (`app/plugins/tauri-plugin-nowplaying`) has the same commands on every platform:
   - `get_now_playing` returns `{ track }`, a `Track` with title, artist, album, duration, position, play state, Spotify ID, volume, artwork URL and player name.
   - `control` takes `{ action, value }`: play/pause, next, previous, seek (`value` in ms) and volume (`value` 0–100).
@@ -109,7 +114,17 @@ Guitarfish is one program. The only network traffic is the Songsterr search (and
   - `scales.ts` is the scale library of the Solos view (every scale as intervals) and lays a scale out on the neck: all notes, playable positions and ASCII tab.
   - `songkey.ts` looks up the playing song's key online (the `song_key` command); `key.ts` finds a key (Krumhansl–Schmuckler) from a chroma vector, built from a local tab's notes or from microphone spectra; `listen.ts` runs the microphone.
   - `solos.ts` renders the Solos view and remembers each song's key.
-  - Every module except `main.ts`, `icons.ts`, `types.ts` and `listen.ts` (Web Audio) has unit tests.
+  - Local MP3 player:
+    - `playback.ts` (`Playback`) holds the mode, Spotify or local. Its `read()` is what the sync loop polls, so a local song goes through the same tab lookup as a Spotify one. Switching modes pauses the other player.
+    - `localplayer.ts` (`LocalPlayer`) is the engine around one `<audio>` element: queue, play/pause/seek, volume and mute, speed (gliding over 300 ms, `preservesPitch`), the A–B loop, error recovery, releasing each file when the next one loads, and the saved session.
+    - `queue.ts` is the play queue as plain data: sequential and shuffled order, repeat off/all/one, and following edits of the list being played.
+    - `music.ts` is the music library (IndexedDB): tracks, copies of picked files, cover art, playlists.
+    - `mp3meta.ts` reads ID3v2.2–2.4 and ID3v1 tags, the cover, and the duration (Xing/Info, VBRI or the constant bitrate) from a file's first bytes and last 128 bytes.
+    - `musicimport.ts` checks and imports files one at a time and recognises duplicates.
+    - `localfiles.ts` gets files by path on desktop (file picker, `local_audio_*` commands) and gives each track a playable URL.
+    - `musicui.ts` has the pure logic of the Music pages: search, sort, times, the drag target and the playback keys.
+    - `musicview.ts` renders the Music pages.
+  - Every module except `main.ts`, `musicview.ts`, `icons.ts`, `types.ts` and `listen.ts` (Web Audio) has unit tests.
 
 ### Data on the device
 
@@ -123,7 +138,15 @@ Guitarfish is one program. The only network traffic is the Songsterr search (and
   | `links` | `[provider, externalId]`, index `songId` | A Spotify track the user confirmed for a song: `{ provider: "spotify", externalId, songId }` |
 
   Normalized titles and artists aren't stored: they are computed when matching, so a change to the normalization rules applies to existing songs.
-- **localStorage**: settings (`tabsync.settings`), layout, history and favorites (local only), "Wrong tab?" picks (`tabsync.songsterr.picks`) and practice settings per local tab (`tabsync.practice`). Older versions also stored a 7-day lookup cache and a library sync queue for the server; they are removed at start, with the server URL, Web API fallback and library sync settings.
+- **IndexedDB**, database `guitarfish-music` (version 1), the music library:
+
+  | Object store | Key | Contents |
+  |---|---|---|
+  | `tracks` | `id` (auto), indexes `fingerprint`, `path` | `title`, `artist`, `album`, `durationMs`, `fileName`, `size`, `fingerprint` (SHA-256 of the first 256 KB, plus the size), `path` (the file on disk, or `null` for a copy), `artId`, `addedAt` |
+  | `blobs` | `id` (the track's id) | `data`: the audio of a picked file (Android, browser) as a `Blob`. Blobs are stored on disk, not in memory |
+  | `art` | `id` (SHA-256 of the image) | `data`: a cover image, stored once for all the tracks of an album |
+  | `playlists` | `id` (auto) | `name`, `trackIds` (in play order), `createdAt` |
+- **localStorage**: settings (`tabsync.settings`, including the playback mode), layout, history and favorites (local only), "Wrong tab?" picks (`tabsync.songsterr.picks`), practice settings per local tab (`tabsync.practice`), the local player's session (`tabsync.player`: queue, current song and position, volume, speed, shuffle and repeat) and the library's sort order (`tabsync.music.sort`). Older versions also stored a 7-day lookup cache and a library sync queue for the server; they are removed at start, with the server URL, Web API fallback and library sync settings.
 
 ## How it works, end to end
 
@@ -182,7 +205,8 @@ guitarfish/
 │   │   ├── src/lib.rs              plugins, menu, command registration
 │   │   ├── src/songsterr.rs        songsterr_search command (Songsterr's public search, links only)
 │   │   ├── src/songkey.rs          song_key command (a recording's key: ReccoBeats, Deezer for the ISRC)
-│   │   ├── build.rs                app manifest: songsterr_search needs a permission
+│   │   ├── src/localaudio.rs       local_audio_open/read commands (the music player's files on disk)
+│   │   ├── build.rs                app manifest: the app's commands need a permission
 │   │   └── permissions/            generated allow/deny permissions for the command
 │   └── plugins/tauri-plugin-nowplaying/
 │       ├── src/desktop.rs          macOS (AppleScript + change observer) + Windows (SMTC) detectors and controls
@@ -254,6 +278,22 @@ npm run tauri android build
 - Tabs live in this device's IndexedDB: they aren't synced between devices, and uninstalling the app or clearing its data deletes them. Keep your original files.
 - Tabs are copyrighted works. Import only tabs you created, tabs licensed to you, or tabs from a licensed provider.
 
+## Your MP3s: the local player
+
+- **Music** in the sidebar is your MP3 library. Use *Import MP3s…* or drop files on the window. Each song's title, artist, album, duration and cover come from its tags; a file without tags is named after the file. A file that is already in the library (same path, or same content) isn't added again. Files that aren't MP3 audio, even when named `.mp3`, are refused and listed with the reason.
+- **Where the files live.** On desktop, Guitarfish only remembers each file's path: the file stays where it is and is never changed. A moved or deleted file is reported when you play it, and the queue moves on to the next song. On Android, and in a plain browser, a picked file can't be reopened by path after a restart, so its audio is copied into the app's storage (up to 300 MB per file).
+- **Search and sort** by title, artist or album (accents don't matter). Sort by date added, title, artist, album or duration. *Remove from library* removes the song from Guitarfish and from every playlist; it never deletes the file on disk.
+- **Playlists**: the *+* next to *Playlists* in the sidebar creates one, and the *+* on a song adds it. Drag a song by its handle to reorder it (or press Alt+↑/↓ on the handle). Play a playlist in order or shuffled, with repeat off, all or one song.
+- **The player bar** has two modes, **Spotify** and **Local**, switched at its right. Only one plays at a time: switching to Local pauses Spotify if it plays on this device, playing an MP3 does too, and switching to Spotify pauses the MP3. In Local mode the bar adds:
+  - shuffle and repeat;
+  - the speed control: − and + in steps of 0.05×, a click on the speed resets it to 1.00×;
+  - the A–B loop button: the first press sets A, the second sets B and starts looping, the third stops. The loop shows on the timeline.
+
+  The *MP3 practice* card in the Tools sidebar has the speed slider (0.25× to 1.5×), presets for 0.5×, 0.75×, 1× and 1.25×, and buttons to set A and B. The pitch stays the same at every speed, and the speed glides to its new value instead of jumping.
+- **Tabs** are found as for Spotify songs, from the title and artist: the Songsterr page, your imported tabs, Solos and the key lookup all work. If the search finds the wrong tab, fix the title and artist in the *Tab search* fields of the *MP3 practice* card (or with *Edit* in the library); only the library changes, not the file. A local tab follows the MP3's position at any speed. The player works the same when no tab is found.
+- **Keys** in Local mode (while Guitarfish, not the Songsterr page, has the focus): Space plays or pauses, ←/→ go back or forward 5 s, Shift+←/→ go to the previous or next song, `[` and `]` (or `-` and `+`) change the speed, `0` resets it, `L` sets the loop and `M` mutes. In Spotify mode these keys do what they always did (Space and the arrows scroll the page).
+- Guitarfish reopens where you stopped: the mode, the queue and its playlist, the song and its position (paused), volume, speed, shuffle and repeat.
+
 ## 4. Songsterr
 
 - On desktop, Songsterr is the main viewer. Each new Spotify song opens its Songsterr page; turn off *Follow Spotify* in the Tools sidebar to keep the current page.
@@ -290,7 +330,7 @@ npm run tauri android build
 
 ## 5. Tests, CI and releases
 
-- **Tests:** `npm test` in `app/` runs Vitest (`npm run coverage` also checks the coverage thresholds in `vitest.config.ts`). The catalogue tests run against `fake-indexeddb`. `cargo test` in `app/src-tauri` covers the Songsterr result parsing and query cleaning (`cargo test -- --ignored live_search` also calls the real Songsterr). `cargo test` in `app/plugins/tauri-plugin-nowplaying` covers the macOS output parser and control commands, and the MPRIS metadata mapping and control calls (those run on every OS).
+- **Tests:** `npm test` in `app/` runs Vitest (`npm run coverage` also checks the coverage thresholds in `vitest.config.ts`). The catalogue and music library tests run against `fake-indexeddb`. The local player is tested against a fake media element; the MP3 tests build real MP3 files (silent frames behind ID3 tags, `test/mp3fixture.ts`), which the e2e tests also play. `cargo test` in `app/src-tauri` covers the Songsterr result parsing and query cleaning (`cargo test -- --ignored live_search` also calls the real Songsterr). `cargo test` in `app/plugins/tauri-plugin-nowplaying` covers the macOS output parser and control commands, and the MPRIS metadata mapping and control calls (those run on every OS).
 - **E2E tests:** `app/e2e/` holds Playwright tests of the built UI in Chromium, made to behave as inside Tauri. `e2e/tauri-mock.ts` (bundled with esbuild and injected before the app) installs `mockIPC` and `mockWindows` from `@tauri-apps/api/mocks`, and answers every `invoke()` through `FakeTauri` in `e2e/fixtures.ts`: tests script what `get_now_playing` reports, what `songsterr_search` returns or whether it fails, and check what the app asked for (player controls, the Songsterr webview's URL). The catalogue is the browser's real IndexedDB, seeded with the app's own `Catalogue` class. No Spotify, Songsterr or network is needed. Run them with `npx playwright install chromium` once, then `npm run build && npm run e2e` in `app/` (they serve `dist/` with `vite preview` on port 4317, or `E2E_PORT`).
 - **CI** (`.github/workflows/ci.yml`) runs on every push and pull request:
   - app typecheck, tests (with coverage thresholds) and build;
@@ -337,4 +377,8 @@ npm run tauri android build
 - Platforms without playback events (Windows, Android) poll the detector every second.
 - Windows, Linux and Android support only Spotify. Removing the package, app-ID or bus-name filter would allow other players.
 - The file picker on Android shows every file; the app refuses files that aren't tabs after you pick them.
+- The local player plays MP3 only, not other formats. Imported songs that were copied (Android, browser) take space in the app's storage, and clearing the app's data deletes them.
+- On Android the local player has no media notification or background service, so Android may stop it while Guitarfish is in the background (not tested on a device yet).
+- Local mode doesn't watch Spotify: if Spotify is started by hand while an MP3 plays, both play until one is paused (the next local play or mode switch pauses Spotify again).
+- A local song can't be linked to a local tab with *Is it one of these?*, as a Spotify track can. That choice is remembered by Spotify track ID, which a local song doesn't have.
 - Tabs are copyrighted works. Only import tabs you created, tabs licensed to you, or tabs from a licensed provider.

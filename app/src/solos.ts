@@ -1,4 +1,5 @@
 import type { CamScene } from "./fretcam";
+import { escapeHtml as esc } from "./html";
 import type { KeyResult } from "./key";
 import { LISTEN_MS } from "./listen";
 import {
@@ -82,10 +83,6 @@ const SOURCE_LABEL: Record<KeySource, string> = {
 };
 
 const NOTE_OPTIONS = Array.from({ length: 12 }, (_, i) => i);
-
-function esc(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
-}
 
 /** Builds the page; call again with a new state to re-render it. */
 export function renderSolos(root: HTMLElement, s: SolosState, act: SolosActions): void {
