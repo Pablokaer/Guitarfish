@@ -224,7 +224,7 @@ test("switching modes never plays both: Spotify mode pauses the local player and
   expect(await audioProp<boolean>(page, "paused")).toBe(false);
 
   tauri.nowPlaying = { ...WONDERWALL, title: "Some Might Say", spotifyId: "sp-smt", isPlaying: false };
-  await page.locator("#mode-switch").getByRole("button", { name: "Spotify" }).click();
+  await page.locator("#mode-switch").getByRole("button", { name: "Streaming" }).click();
   await expect.poll(() => audioProp<boolean>(page, "paused")).toBe(true);
   await expect(page.locator("#np-title")).toHaveText("Some Might Say");
   await expect(page.locator("#speed-chip")).toBeHidden();

@@ -5,23 +5,25 @@
 <h1 align="center">Guitarfish</h1>
 
 <p align="center">
-  <b>The guitar tab of the song you're playing on Spotify, in time with the music.</b><br />
+  <b>The guitar tab of the song you're playing on YouTube or Spotify, in time with the music.</b><br />
   macOS · Windows · Linux · Android · <a href="https://github.com/Pablokaer/Guitarfish/releases/latest">Download the latest release</a>
 </p>
 
-Guitarfish runs alongside Spotify. When the song changes, it detects the new track, finds a guitar tab for it and shows it: either the song's page on [Songsterr](https://www.songsterr.com) (desktop) or a tab you imported, rendered locally and scrolled in time with the song.
+Guitarfish runs alongside YouTube (the app, YouTube Music, or a video in your browser) and Spotify. When the song changes, it detects the new track, finds a guitar tab for it and shows it: either the song's page on [Songsterr](https://www.songsterr.com) (desktop) or a tab you imported, rendered locally and scrolled in time with the song.
 
-It also plays your own MP3 files: a music library with playlists, a speed control from 0.25× to 1.5× that keeps the pitch, and an A–B loop for practising one passage. Those songs get their tabs the same way as Spotify songs.
+It also plays your own MP3 files: a music library with playlists, a speed control from 0.25× to 1.5× that keeps the pitch, and an A–B loop for practising one passage. Those songs get their tabs the same way as the ones you play on YouTube or Spotify.
 
 Everything runs on your device. There is no server to install: the app searches Songsterr itself, and your imported tabs are stored on the device. For the Solos view it also looks up each song's key online (title, artist and Spotify track id are sent to Deezer and ReccoBeats).
 
-| Platform | How it detects the song | Status |
-|---|---|---|
-| macOS | AppleScript query to the Spotify app (`osascript`) | ✅ |
-| Windows | Windows media controls API (SMTC), the API behind the media overlay | ✅ |
-| Linux | MPRIS over D-Bus, the interface the Spotify desktop app publishes | ✅ |
-| Android | `MediaSessionManager`, after the user grants Notification access | ✅ |
-| iOS | — (iOS can't read other apps' playback) | ❌ |
+| Platform | How it detects the song | YouTube | Spotify |
+|---|---|---|---|
+| macOS | AppleScript: the YouTube tabs of Chrome, Safari, Edge, Brave, Arc, Vivaldi and Chromium, and the Spotify app | ✅ browsers (YouTube, YouTube Music) | ✅ |
+| Windows | Windows media controls API (SMTC), the API behind the media overlay | ✅ browsers, YouTube and YouTube Music installed as apps | ✅ |
+| Linux | MPRIS over D-Bus, the interface media players and browsers publish | ✅ browsers, YouTube Music desktop app | ✅ |
+| Android | `MediaSessionManager`, after the user grants Notification access | ✅ YouTube, YouTube Music, browsers | ✅ |
+| iOS | — (iOS can't read other apps' playback) | ❌ | ❌ |
+
+When several play at once, Guitarfish follows the one that is playing, and among those YouTube first. A YouTube video is read as the song it is: "Oasis - Wonderwall (Official Video)" on the channel "OasisVEVO" becomes *Wonderwall* by *Oasis* (`app/src/youtube.ts`).
 
 ## Contents
 
@@ -89,7 +91,8 @@ Guitarfish is one program. The only network traffic is the Songsterr search (and
 - **Key lookup** (`app/src-tauri/src/songkey.rs`): `song_key(title, artist, spotifyId?) -> Option<{ tonic, mode, tempo, via }>` asks `https://api.reccobeats.com/v1/audio-features?ids=…` by Spotify track id; failing that, it searches `https://api.deezer.com/search` for the title and artist, keeps the matching recordings' ISRCs (same title and artist, no live/remix/… versions) and asks ReccoBeats by ISRC. 6-second timeout, HTTPS only, no API keys. Same permission scheme: `allow-song-key`, main window only.
 - **Local files** (`app/src-tauri/src/localaudio.rs`): `local_audio_open(paths) -> Vec<{ path, name, size, error }>` checks that each path is a readable `.mp3` file and lets the asset protocol serve it. The protocol is enabled in `tauri.conf.json` with an empty scope, so it can serve only the files opened this way. `local_audio_read(path, offset, len)` returns up to 32 MB of an opened file as raw bytes; the import reads the ID3 tag this way. Nothing is ever written. Same permission scheme: `allow-local-audio-open` and `allow-local-audio-read`, main window only.
 - **Now-playing plugin** (`app/plugins/tauri-plugin-nowplaying`) has the same commands on every platform:
-  - `get_now_playing` returns `{ track }`, a `Track` with title, artist, album, duration, position, play state, Spotify ID, volume, artwork URL and player name.
+  - `get_now_playing` returns `{ track }`, a `Track` with title, artist, album, duration, position, play state, Spotify ID, volume, artwork URL, player name and service (`spotify`, `youtube`, `youtube-music`, or `browser` for media in a browser whose site the OS doesn't tell). `sources.rs` says which sessions count and picks one: a playing session before a paused one, then YouTube, then other browser media, then Spotify. The Kotlin plugin applies the same rule.
+  - On macOS, `browser.rs` lists each running browser's YouTube tabs with AppleScript and asks each page for its media session and the video's state. That needs *Allow JavaScript from Apple Events* in the browser; without it Guitarfish still sees the tab's title, but not the position, the pause state or the controls.
   - `control` takes `{ action, value }`: play/pause, next, previous, seek (`value` in ms) and volume (`value` 0–100).
   - `get_capabilities` returns `{ transport, seek, volume, events }`: which of those controls work on this platform, and whether the plugin emits change events.
   - `check_permission` / `request_permission` matter on Android only.
@@ -246,9 +249,12 @@ npm run tauri build        # installer: .dmg/.app (macOS), .msi/.exe (Windows), 
 
 That's all: there is nothing else to run. `tauri build` also signs the updater bundles, so it needs `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` in the environment (see [Updater signing](#5-tests-ci-and-releases)). `tauri dev` doesn't.
 
-- **macOS:** the first time Guitarfish reads Spotify, macOS asks permission to control Spotify. If you click "Don't Allow" by mistake, re-enable it in System Settings → Privacy & Security → Automation. In `tauri dev` the prompt names your terminal app instead of Guitarfish.
-- **Windows:** no setup needed. Works with the Spotify desktop installer and the Microsoft Store version. SMTC doesn't expose the Spotify track ID, so Windows matches by artist and title only.
-- **Linux:** no setup needed. Guitarfish reads the Spotify desktop app (`.deb`, Snap or Flatpak) through MPRIS on the D-Bus session bus, including the Spotify track ID. The Spotify web player isn't detected.
+- **macOS:**
+  - The first time Guitarfish reads Spotify or a browser, macOS asks permission to control it. If you click "Don't Allow" by mistake, re-enable it in System Settings → Privacy & Security → Automation. In `tauri dev` the prompt names your terminal app instead of Guitarfish.
+  - For YouTube in a browser, also allow JavaScript from Apple Events, so Guitarfish sees where the video is and can play, pause and seek it. In Chrome, Edge, Brave, Arc, Vivaldi and Chromium: *View → Developer → Allow JavaScript from Apple Events*. In Safari: *Settings → Advanced → Show features for web developers*, then *Develop → Allow JavaScript from Apple Events*. Without it, Guitarfish only knows which video the tab shows.
+  - Firefox can't be asked for its tabs on macOS, so YouTube in Firefox isn't detected there.
+- **Windows:** no setup needed. Works with YouTube in Chrome, Edge, Firefox, Brave, Opera or Vivaldi (and installed as an app from them), YouTube Music, and Spotify (desktop installer or Microsoft Store). SMTC doesn't expose the Spotify track ID, so Windows matches by artist and title only. Firefox reports no position to Windows, so a local tab can't follow a video playing in Firefox; Chromium browsers do report it.
+- **Linux:** no setup needed. Guitarfish reads the browsers, the YouTube Music desktop app and the Spotify desktop app (`.deb`, Snap or Flatpak) through MPRIS on the D-Bus session bus, including the Spotify track ID. The Spotify web player counts as browser media.
 - `npm run dev` alone serves the UI in a plain browser, which is handy for layout work, but nothing is detected there and Songsterr can't be searched: both need the app shell.
 
 ## 2. Android app
@@ -264,8 +270,8 @@ npm run tauri android build
 
 - On first launch, the app opens **Notification access**. Turn on *Guitarfish*, then go back to the app. Android only shares other apps' media sessions with apps that have this access.
 - Nothing else to configure: Songsterr is searched over HTTPS from the app itself, and your tabs are stored on the phone. The app makes no plain-HTTP requests, so release builds keep Tauri's default of no cleartext traffic.
-- To use it alongside Spotify, run Guitarfish in split-screen or as the foreground app. Spotify keeps playing in the background.
-- Play/pause, next, previous and seek go through Spotify's media session, so they need Notification access too. Volume isn't offered (that is the phone's media volume, not Spotify's).
+- Guitarfish follows the YouTube app, YouTube Music, videos in Chrome, Firefox, Brave, Edge, Samsung Internet, Opera, Vivaldi and DuckDuckGo, and Spotify. Run it in split-screen with the player, or as the foreground app while the player keeps playing in the background (YouTube needs YouTube Premium, or picture-in-picture, to play in the background).
+- Play/pause, next, previous and seek go through the player's media session, so they need Notification access too. Volume isn't offered (that is the phone's media volume, not the player's).
 - Songsterr opens in the browser because child webviews are desktop-only. Your imported tabs open in the local viewer.
 - *Import tab…* uses the system file picker. It shows all files there (Android filters by MIME type, which tab formats don't have); the app checks the extension after you choose.
 - `cargo clippy --target aarch64-linux-android` compiles ring's C code (the TLS behind the Songsterr search), so it needs the NDK's clang: set `CC_aarch64_linux_android=$NDK_HOME/toolchains/llvm/prebuilt/<host>/bin/aarch64-linux-android24-clang` and `AR_aarch64_linux_android=$NDK_HOME/toolchains/llvm/prebuilt/<host>/bin/llvm-ar`. `tauri android build` sets this up itself.
@@ -370,12 +376,14 @@ npm run tauri android build
 ## Known limitations / next steps
 
 - Follow mode assumes Spotify plays the song as written in the tab. Live versions, edits or a different tempo drift; use the offset slider to compensate. *Next: alphaTab's sync points to align the tab with a recording.*
-- Only Spotify playing on this device is detected: not Spotify Connect playback on another device, and not the web player.
+- Only playback on this device is detected: not Spotify Connect or YouTube cast to another device.
+- YouTube titles are guessed: "Artist - Title" and the channel's name work for most music videos, but covers, lessons, live recordings and compilations can be searched wrongly. Fix the search with *Wrong tab?*.
+- On Windows, Linux and Android a browser doesn't say which site is playing, so other media playing in a browser (a podcast, a course) is followed too, read as if it were a YouTube video.
 - Your tabs, history and favorites stay on each device; there is no sync or backup, and clearing the app's data deletes them. *Next: export and import of the catalogue.*
 - Songsterr search needs an internet connection. Songsterr has no official API, so a change on their side can break the search until the app is updated (the status then shows *Songsterr unreachable*).
 - Fuzzy matching scans every song in the catalogue, which is fine for thousands of personal tabs.
 - Platforms without playback events (Windows, Android) poll the detector every second.
-- Windows, Linux and Android support only Spotify. Removing the package, app-ID or bus-name filter would allow other players.
+- Other players (Apple Music, VLC, Deezer…) aren't followed. Adding them to the lists in `sources.rs` and the Kotlin plugin would.
 - The file picker on Android shows every file; the app refuses files that aren't tabs after you pick them.
 - The local player plays MP3 only, not other formats. Imported songs that were copied (Android, browser) take space in the app's storage, and clearing the app's data deletes them.
 - On Android the local player has no media notification or background service, so Android may stop it while Guitarfish is in the background (not tested on a device yet).

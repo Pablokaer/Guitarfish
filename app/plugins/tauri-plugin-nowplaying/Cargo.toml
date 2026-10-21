@@ -2,13 +2,15 @@
 name = "tauri-plugin-nowplaying"
 version = "0.7.0"
 edition = "2021"
-description = "Reads the currently playing track from the OS media session (macOS, Windows, Linux, Android)."
+description = "Reads the currently playing track (Spotify, YouTube, YouTube Music) from the OS (macOS, Windows, Linux, Android)."
 links = "tauri-plugin-nowplaying"
 exclude = ["/android/build", "/android/.gradle"]
 
 [dependencies]
 tauri = "2"
 serde = { version = "1", features = ["derive"] }
+# macOS: the JSON a YouTube page reports (browser.rs).
+serde_json = "1"
 thiserror = "2"
 
 # macOS: observe Spotify's PlaybackStateChanged distributed notification.

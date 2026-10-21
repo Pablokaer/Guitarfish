@@ -27,16 +27,19 @@ pub(crate) fn start_events<R: Runtime>(app: &AppHandle<R>) {
         drop(emit);
         false
     };
-    EVENTS.store(installed, Ordering::Relaxed);
+    // Reported only where every followed player signals: on macOS only Spotify
+    // does, so the app keeps polling there for the browsers' YouTube tabs.
+    EVENTS.store(installed && imp::EVENTS_REPLACE_POLLING, Ordering::Relaxed);
 }
 
-/// Read the current track from the OS. `track: None` when nothing is playing,
-/// Spotify is closed, or an ad is playing.
+/// Read the current track from the OS: Spotify, YouTube (its app, YouTube Music or
+/// a browser tab) or other media in a browser, whichever `sources::pick` prefers.
+/// `track: None` when nothing is playing, or only a Spotify ad.
 pub fn read_now_playing() -> Result<NowPlayingResponse> {
     imp::read()
 }
 
-/// Sends a playback command to Spotify. See `commands::control` for the actions.
+/// Sends a playback command to the player a read reports. See `commands::control`.
 pub fn control(action: &str, value: Option<f64>) -> Result<()> {
     imp::control(action, value)
 }
@@ -50,18 +53,23 @@ fn unsupported(action: &str) -> crate::Error {
 }
 
 // ---------------------------------------------------------------------------
-// macOS: AppleScript against the Spotify app.
+// macOS: AppleScript against the Spotify app and the browsers' YouTube tabs.
 // ---------------------------------------------------------------------------
 #[cfg(target_os = "macos")]
 mod imp {
     use std::process::Command;
+    use std::sync::Mutex;
 
+    use crate::browser::{self, Browser};
     use crate::models::{spotify_track_id, NowPlayingResponse, PlaybackCapabilities, Track};
+    use crate::sources::{self, Service};
     use crate::{Error, Result};
 
     // `events` is filled in at runtime, once `watch` succeeds.
     pub const CAPABILITIES: PlaybackCapabilities =
         PlaybackCapabilities { transport: true, seek: true, volume: true, events: false };
+    /// Only Spotify posts change notifications; browsers' tabs have to be polled.
+    pub const EVENTS_REPLACE_POLLING: bool = false;
 
     /// Calls `on_change` on the main thread each time Spotify posts the
     /// `com.spotify.client.PlaybackStateChanged` distributed notification
@@ -115,23 +123,86 @@ end if
 return ""
 "#;
 
-    fn osascript(script: &str) -> Result<String> {
+    /// What the last read reported, so `control` drives the same player.
+    #[derive(Clone)]
+    enum Chosen {
+        Spotify,
+        Tab { browser: Browser, url: String },
+    }
+    static CHOSEN: Mutex<Option<Chosen>> = Mutex::new(None);
+
+    fn osascript(script: &str, app: &str) -> Result<String> {
         let out = Command::new("/usr/bin/osascript").arg("-e").arg(script).output()?;
         if !out.status.success() {
             let err = String::from_utf8_lossy(&out.stderr);
-            // -1743: the user denied Automation access to Spotify.
+            // -1743: the user denied Automation access to the app.
             if err.contains("-1743") {
-                return Err(Error::Detector(
-                    "Automation access to Spotify was denied. Allow it in System Settings → Privacy & Security → Automation.".into(),
-                ));
+                return Err(Error::Detector(format!(
+                    "Automation access to {app} was denied. Allow it in System Settings → Privacy & Security → Automation."
+                )));
             }
             return Err(Error::Detector(err.trim().to_string()));
         }
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
+    /// The browsers running now (`ps`, which needs no permission). Only those are
+    /// scripted: telling a browser that isn't running would launch it.
+    fn running_browsers() -> Vec<Browser> {
+        Command::new("/bin/ps")
+            .args(["-Ac", "-o", "comm="])
+            .output()
+            .map(|o| browser::running(&String::from_utf8_lossy(&o.stdout)))
+            .unwrap_or_default()
+    }
+
+    fn service(t: &Track) -> Service {
+        match t.service.as_deref() {
+            Some("spotify") => Service::Spotify,
+            Some("youtube-music") => Service::YoutubeMusic,
+            _ => Service::Youtube,
+        }
+    }
+
     pub fn read() -> Result<NowPlayingResponse> {
-        Ok(NowPlayingResponse { track: parse(&osascript(SCRIPT)?) })
+        // What each candidate is, its track, and its play state for the ranking.
+        let mut found: Vec<(Chosen, Track, Option<bool>)> = Vec::new();
+        let mut spotify_err: Option<Error> = None;
+        match osascript(SCRIPT, "Spotify") {
+            Ok(out) => {
+                if let Some(t) = parse(&out) {
+                    let playing = Some(t.is_playing);
+                    found.push((Chosen::Spotify, t, playing));
+                }
+            }
+            Err(e) => spotify_err = Some(e),
+        }
+        for b in running_browsers() {
+            // A browser that fails (Automation denied) mustn't hide the others.
+            let Ok(out) = osascript(&browser::read_script(&b), b.label) else { continue };
+            for tab in browser::parse_tabs(&out) {
+                if let Some((t, playing)) = browser::tab_track(&b, &tab) {
+                    found.push((Chosen::Tab { browser: b, url: tab.url.clone() }, t, playing));
+                }
+            }
+        }
+        let pick = sources::pick(&found, |(_, t, playing)| (service(t), *playing));
+        let mut chosen = CHOSEN.lock().unwrap_or_else(|e| e.into_inner());
+        match pick {
+            Some(i) => {
+                let (what, track, _) = found.swap_remove(i);
+                *chosen = Some(what);
+                Ok(NowPlayingResponse { track: Some(track) })
+            }
+            None => {
+                *chosen = None;
+                // Spotify's error (e.g. Automation denied) only matters when nothing else plays.
+                match spotify_err {
+                    Some(e) => Err(e),
+                    None => Ok(NowPlayingResponse { track: None }),
+                }
+            }
+        }
     }
 
     /// Builds the AppleScript statement for a control action. Numbers are
@@ -149,11 +220,26 @@ return ""
     }
 
     pub fn control(action: &str, value: Option<f64>) -> Result<()> {
+        let chosen = CHOSEN.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(Chosen::Tab { browser: b, url }) = chosen {
+            let js = browser::control_js(action, value).ok_or_else(|| super::unsupported(action))?;
+            return match osascript(&browser::control_script(&b, &url, &js), b.label) {
+                Ok(out) if out.trim() == "gone" => {
+                    Err(Error::Detector(format!("The YouTube tab was closed in {}", b.label)))
+                }
+                Ok(_) => Ok(()),
+                Err(Error::Detector(msg)) => {
+                    Err(Error::Detector(browser::javascript_off_hint(&b, &msg).unwrap_or(msg)))
+                }
+                Err(e) => Err(e),
+            };
+        }
         let stmt = control_statement(action, value).ok_or_else(|| super::unsupported(action))?;
         // Same guard as reads: never launch Spotify just to control it.
-        osascript(&format!(
-            "if application \"Spotify\" is running then\n  tell application \"Spotify\" to {stmt}\nend if"
-        ))?;
+        osascript(
+            &format!("if application \"Spotify\" is running then\n  tell application \"Spotify\" to {stmt}\nend if"),
+            "Spotify",
+        )?;
         Ok(())
     }
 
@@ -184,12 +270,14 @@ return ""
             artwork_url: f.get(8).map(|s| s.trim()).filter(|s| s.starts_with("http")).map(str::to_string),
             source: "os".into(),
             player: "Spotify (macOS)".into(),
+            service: Some("spotify".into()),
         })
     }
 }
 
 // ---------------------------------------------------------------------------
-// Windows: Global System Media Transport Controls.
+// Windows: Global System Media Transport Controls. Spotify, the browsers
+// (YouTube in a tab, or YouTube installed as an app) and YouTube Music apps.
 // ---------------------------------------------------------------------------
 #[cfg(target_os = "windows")]
 mod imp {
@@ -200,11 +288,14 @@ mod imp {
     };
 
     use crate::models::{NowPlayingResponse, PlaybackCapabilities, Track};
+    use crate::sources::{self, Service, Source};
     use crate::{Error, Result};
 
     // SMTC has no volume control; that belongs to the system mixer.
     pub const CAPABILITIES: PlaybackCapabilities =
         PlaybackCapabilities { transport: true, seek: true, volume: false, events: false };
+    /// SMTC change events aren't wired up (see `start_events`), so nothing replaces polling.
+    pub const EVENTS_REPLACE_POLLING: bool = false;
 
     /// Windows FILETIME epoch (1601-01-01) to Unix epoch, in 100 ns ticks.
     const EPOCH_DIFF_100NS: i64 = 116_444_736_000_000_000;
@@ -217,40 +308,41 @@ mod imp {
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
     }
 
-    /// Prefer a Spotify session; fall back to the session Windows considers current
-    /// only if it is Spotify too (MVP is Spotify-focused).
-    fn find_spotify(mgr: &Manager) -> Result<Option<Session>> {
-        let sessions = mgr.GetSessions().map_err(werr)?;
-        for i in 0..sessions.Size().map_err(werr)? {
-            let s = sessions.GetAt(i).map_err(werr)?;
-            let id = s.SourceAppUserModelId().map_err(werr)?.to_string().to_lowercase();
-            // "Spotify.exe" (installer) or "SpotifyAB.SpotifyMusic_…!Spotify" (Store).
-            if id.contains("spotify") {
-                return Ok(Some(s));
+    /// The followed sessions, the one Windows considers current first (it wins ties).
+    fn sessions(mgr: &Manager) -> Result<Vec<(Session, Source)>> {
+        let current = mgr.GetCurrentSession().ok().and_then(|s| s.SourceAppUserModelId().ok()).map(|id| id.to_string());
+        let list = mgr.GetSessions().map_err(werr)?;
+        let mut out = Vec::new();
+        for i in 0..list.Size().map_err(werr)? {
+            let s = list.GetAt(i).map_err(werr)?;
+            let id = s.SourceAppUserModelId().map_err(werr)?.to_string();
+            let Some(source) = sources::windows_source(&id) else { continue };
+            if current.as_deref() == Some(id.as_str()) {
+                out.insert(0, (s, source));
+            } else {
+                out.push((s, source));
             }
         }
-        Ok(None)
+        Ok(out)
     }
 
-    pub fn read() -> Result<NowPlayingResponse> {
-        let mgr = Manager::RequestAsync().map_err(werr)?.get().map_err(werr)?;
-        let Some(session) = find_spotify(&mgr)? else {
-            return Ok(NowPlayingResponse { track: None });
-        };
+    fn is_playing(s: &Session) -> bool {
+        s.GetPlaybackInfo().and_then(|p| p.PlaybackStatus()).map(|st| st == Status::Playing).unwrap_or(false)
+    }
 
+    /// The session's track, or None when it has nothing to show (a Spotify ad).
+    fn track(session: &Session, source: Source) -> Result<Option<Track>> {
         let props = session.TryGetMediaPropertiesAsync().map_err(werr)?.get().map_err(werr)?;
         let title = props.Title().map_err(werr)?.to_string();
         let artist = props.Artist().map_err(werr)?.to_string();
         // Spotify reports ads with an empty artist (and a title like "Advertisement").
-        if title.is_empty() || artist.is_empty() {
-            return Ok(NowPlayingResponse { track: None });
+        if title.is_empty() || (source.service == Service::Spotify && artist.is_empty()) {
+            return Ok(None);
         }
         let album = props.AlbumTitle().map(|s| s.to_string()).ok().filter(|s| !s.is_empty());
+        let is_playing = is_playing(session);
 
-        let is_playing =
-            session.GetPlaybackInfo().and_then(|p| p.PlaybackStatus()).map(|s| s == Status::Playing).unwrap_or(false);
-
-        // Timeline values are in 100 ns units. Spotify only refreshes Position on
+        // Timeline values are in 100 ns units. Players only refresh Position on
         // state changes, so extrapolate from LastUpdatedTime while playing.
         let (duration_ms, position_ms) = match session.GetTimelineProperties() {
             Ok(tl) => {
@@ -268,34 +360,52 @@ mod imp {
                 if end > 0 {
                     pos = pos.min(end);
                 }
-                ((end > 0).then_some(end as u64), (pos >= 0).then_some(pos as u64))
+                // A session without a timeline (some sites) reports 0 for both.
+                ((end > 0).then_some(end as u64), (end > 0 && pos >= 0).then_some(pos as u64))
             }
             Err(_) => (None, None),
         };
 
-        Ok(NowPlayingResponse {
-            track: Some(Track {
-                title,
-                artist,
-                album,
-                duration_ms,
-                position_ms,
-                is_playing,
-                // SMTC does not expose the Spotify track ID.
-                spotify_id: None,
-                volume: None,
-                // SMTC exposes a thumbnail stream, not a URL.
-                artwork_url: None,
-                source: "os".into(),
-                player: "Spotify (Windows)".into(),
-            }),
-        })
+        Ok(Some(Track {
+            title,
+            artist,
+            album,
+            duration_ms,
+            position_ms,
+            is_playing,
+            // SMTC does not expose the Spotify track ID.
+            spotify_id: None,
+            volume: None,
+            // SMTC exposes a thumbnail stream, not a URL.
+            artwork_url: None,
+            source: "os".into(),
+            player: source.player("Windows"),
+            service: Some(source.service.as_str().into()),
+        }))
+    }
+
+    /// The session to report and its track: the preferred one (`sources::pick`),
+    /// or, when it has nothing to show, the next one.
+    fn current(mgr: &Manager) -> Result<Option<(Session, Track)>> {
+        let mut all = sessions(mgr)?;
+        while let Some(i) = sources::pick(&all, |(s, src)| (src.service, Some(is_playing(s)))) {
+            let (session, source) = all.swap_remove(i);
+            if let Some(t) = track(&session, source)? {
+                return Ok(Some((session, t)));
+            }
+        }
+        Ok(None)
+    }
+
+    pub fn read() -> Result<NowPlayingResponse> {
+        let mgr = Manager::RequestAsync().map_err(werr)?.get().map_err(werr)?;
+        Ok(NowPlayingResponse { track: current(&mgr)?.map(|(_, t)| t) })
     }
 
     pub fn control(action: &str, value: Option<f64>) -> Result<()> {
         let mgr = Manager::RequestAsync().map_err(werr)?.get().map_err(werr)?;
-        let Some(session) = find_spotify(&mgr)? else {
-            return Err(Error::Detector("Spotify is not running".into()));
+        let Some((session, _)) = current(&mgr)? else {
+            return Err(Error::Detector("Nothing is playing".into()));
         };
         let op = match action {
             "playpause" => session.TryTogglePlayPauseAsync(),
@@ -311,6 +421,21 @@ mod imp {
         .map_err(werr)?;
         op.get().map_err(werr)?;
         Ok(())
+    }
+
+    /// Prints the SMTC sessions this machine has now and what Guitarfish makes of
+    /// them: `cargo test -- --ignored live_sessions --nocapture` while YouTube plays.
+    #[test]
+    #[ignore = "reads this machine's media sessions"]
+    fn live_sessions() {
+        let mgr = Manager::RequestAsync().unwrap().get().unwrap();
+        let list = mgr.GetSessions().unwrap();
+        for i in 0..list.Size().unwrap() {
+            let s = list.GetAt(i).unwrap();
+            let id = s.SourceAppUserModelId().unwrap().to_string();
+            println!("{id:?} -> {:?}, playing {}", sources::windows_source(&id), is_playing(&s));
+        }
+        println!("reported: {:?}", read().unwrap().track);
     }
 }
 
@@ -336,6 +461,7 @@ mod tests {
         assert_eq!(t.spotify_id.as_deref(), Some("abc"));
         assert_eq!(t.volume, None);
         assert_eq!(t.artwork_url, None);
+        assert_eq!(t.service.as_deref(), Some("spotify"));
     }
 
     #[test]

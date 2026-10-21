@@ -13,7 +13,7 @@
         <div class="traffic-space" data-tauri-drag-region></div>
         <span id="titlebar-text" class="titlebar-text" data-tauri-drag-region>Guitarfish</span>
         <button id="btn-exit-focus" class="focus-exit" type="button" title="Exit Focus Mode (⌘⇧F or Esc)"><i data-icon="exitFocus" data-size="13"></i><span>Exit Focus</span></button>
-        <button id="btn-player-show" class="icon-btn tiny" type="button" title="Show Spotify player (⌘⇧2)" aria-label="Show Spotify player"><i data-icon="chevronUp" data-size="14"></i></button>
+        <button id="btn-player-show" class="icon-btn tiny" type="button" title="Show player (⌘⇧2)" aria-label="Show player"><i data-icon="chevronUp" data-size="14"></i></button>
       </header>
 
       <div class="body">
@@ -108,7 +108,7 @@
             </div>
 
             <section class="card">
-              <h3><i data-icon="music" data-size="15"></i><span id="tools-player-title">Spotify</span></h3>
+              <h3><i data-icon="music" data-size="15"></i><span id="tools-player-title">YouTube · Spotify</span></h3>
               <div class="kv"><span>Status</span><span id="tools-status" class="status-text" data-tone="idle">Waiting for playback</span></div>
               <div class="kv"><span>Source</span><span id="tools-source" class="muted">—</span></div>
               <p id="tools-status-detail" class="hint" hidden></p>
@@ -236,7 +236,7 @@
         </aside>
       </div>
 
-      <!-- ============ Bottom: Spotify player (expanded / collapsed strip / hidden) ============ -->
+      <!-- ============ Bottom: player (expanded / collapsed strip / hidden) ============ -->
       <!-- The local MP3 player's audio element (localplayer.ts). -->
       <audio id="local-audio" preload="metadata" hidden></audio>
 
@@ -245,8 +245,8 @@
           <div class="np">
             <div id="np-art" class="art"><i data-icon="music" data-size="22"></i></div>
             <div class="np-meta">
-              <div id="np-title" class="np-title">Waiting for Spotify…</div>
-              <div id="np-artist" class="np-artist">Play a song in Spotify on this device</div>
+              <div id="np-title" class="np-title">Waiting for YouTube or Spotify…</div>
+              <div id="np-artist" class="np-artist">Play a song on YouTube or Spotify on this device</div>
             </div>
           </div>
 
@@ -283,7 +283,7 @@
               <input id="volume-range" type="range" min="0" max="100" step="1" value="50" aria-label="Volume" />
             </div>
             <div id="mode-switch" class="segmented mode-switch" role="group" aria-label="Player">
-              <button type="button" data-mode="spotify" aria-pressed="true" title="Follow Spotify on this device">Spotify</button>
+              <button type="button" data-mode="spotify" aria-pressed="true" title="Follow YouTube or Spotify on this device">Streaming</button>
               <button type="button" data-mode="local" aria-pressed="false" title="Play your MP3 files">Local</button>
             </div>
             <span id="status-pill" class="status-pill" data-tone="idle" role="status" aria-live="polite"><span class="dot"></span><span class="status-label">Waiting for playback</span></span>
@@ -294,7 +294,7 @@
         <div class="player-strip">
           <span class="mini-dot" id="strip-dot" data-tone="idle"></span>
           <div class="strip-meta">
-            <span id="strip-title" class="strip-title">Waiting for Spotify…</span>
+            <span id="strip-title" class="strip-title">Waiting for YouTube or Spotify…</span>
             <span id="strip-artist" class="strip-artist"></span>
           </div>
           <span id="strip-status" class="strip-status">Waiting for playback</span>

@@ -1,6 +1,8 @@
-//! Linux (and the BSDs): MPRIS over the D-Bus session bus. Spotify's desktop
-//! client registers `org.mpris.MediaPlayer2.spotify`. The D-Bus values are
-//! converted to plain types here; `crate::mpris` does the (tested) mapping.
+//! Linux (and the BSDs): MPRIS over the D-Bus session bus. Every player registers
+//! `org.mpris.MediaPlayer2.<name>`: Spotify's desktop client `spotify`, browsers
+//! (YouTube in a tab) `chromium.instance…`, `firefox.instance…` and so on.
+//! `crate::sources` says which ones count and which one wins; the D-Bus values
+//! are converted to plain types here and `crate::mpris` does the (tested) mapping.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -12,14 +14,16 @@ use zbus::proxy::CacheProperties;
 use zbus::zvariant::{ObjectPath, OwnedValue, Value};
 use zbus::MatchRule;
 
-use crate::models::{NowPlayingResponse, PlaybackCapabilities};
+use crate::models::{NowPlayingResponse, PlaybackCapabilities, Track};
 use crate::mpris::{self, MetaValue, Metadata, MprisCall, PlayerState};
+use crate::sources::{self, Service, Source};
 use crate::{Error, Result};
 
 pub const CAPABILITIES: PlaybackCapabilities =
     PlaybackCapabilities { transport: true, seek: true, volume: true, events: false };
+/// Every MPRIS player signals its changes, so the app may poll less often.
+pub const EVENTS_REPLACE_POLLING: bool = true;
 
-const BUS_NAME: &str = "org.mpris.MediaPlayer2.spotify";
 const OBJECT_PATH: &str = "/org/mpris/MediaPlayer2";
 const PLAYER_IFACE: &str = "org.mpris.MediaPlayer2.Player";
 
@@ -40,19 +44,17 @@ fn connection() -> Result<Connection> {
     Ok(c)
 }
 
-fn bus_name() -> BusName<'static> {
-    BusName::try_from(BUS_NAME).expect("valid bus name")
+/// The followed players on the bus (see `sources::mpris_source`), with their bus names.
+fn players(conn: &Connection) -> Result<Vec<(String, Source)>> {
+    let names = DBusProxy::new(conn).map_err(derr)?.list_names().map_err(derr)?;
+    Ok(names.into_iter().filter_map(|n| sources::mpris_source(n.as_str()).map(|s| (n.to_string(), s))).collect())
 }
 
-/// Spotify's player proxy, or None when Spotify isn't running.
-fn player(conn: &Connection) -> Result<Option<Proxy<'static>>> {
-    if !DBusProxy::new(conn).map_err(derr)?.name_has_owner(bus_name()).map_err(derr)? {
-        return Ok(None);
-    }
-    // No property cache: each read wants fresh values, and a cache would add a
-    // signal subscription for every short-lived proxy.
-    let p = proxy::Builder::new(conn)
-        .destination(BUS_NAME)
+/// A player's proxy. No property cache: each read wants fresh values, and a
+/// cache would add a signal subscription for every short-lived proxy.
+fn player(conn: &Connection, bus_name: &str) -> Result<Proxy<'static>> {
+    proxy::Builder::new(conn)
+        .destination(bus_name.to_owned())
         .map_err(derr)?
         .path(OBJECT_PATH)
         .map_err(derr)?
@@ -60,8 +62,7 @@ fn player(conn: &Connection) -> Result<Option<Proxy<'static>>> {
         .map_err(derr)?
         .cache_properties(CacheProperties::No)
         .build()
-        .map_err(derr)?;
-    Ok(Some(p))
+        .map_err(derr)
 }
 
 fn meta_value(v: &Value<'_>) -> Option<MetaValue> {
@@ -96,24 +97,41 @@ fn read_state(p: &Proxy<'_>) -> Result<PlayerState> {
     Ok(PlayerState {
         metadata: read_metadata(p)?,
         status: p.get_property("PlaybackStatus").map_err(derr)?,
-        // Optional: some Spotify builds don't implement them.
+        // Optional: some players (and Spotify builds) don't implement them.
         position_us: p.get_property("Position").ok(),
         volume: p.get_property("Volume").ok(),
     })
 }
 
+/// The player to report, its proxy and its track: see `sources::pick`. A player
+/// that fails to answer is skipped, the others still count.
+fn current(conn: &Connection) -> Result<Option<(Proxy<'static>, Track)>> {
+    let mut found: Vec<(Proxy<'static>, Track)> = Vec::new();
+    for (name, source) in players(conn)? {
+        let Ok(p) = player(conn, &name) else { continue };
+        let Ok(state) = read_state(&p) else { continue };
+        if let Some(track) = mpris::track_from_state(&state, source) {
+            found.push((p, track));
+        }
+    }
+    let service = |t: &Track| match t.service.as_deref() {
+        Some("youtube") => Service::Youtube,
+        Some("youtube-music") => Service::YoutubeMusic,
+        Some("spotify") => Service::Spotify,
+        _ => Service::Browser,
+    };
+    Ok(sources::pick(&found, |(_, t)| (service(t), Some(t.is_playing))).map(|i| found.swap_remove(i)))
+}
+
 pub fn read() -> Result<NowPlayingResponse> {
     let conn = connection()?;
-    let Some(p) = player(&conn)? else {
-        return Ok(NowPlayingResponse { track: None });
-    };
-    Ok(NowPlayingResponse { track: mpris::track_from_state(&read_state(&p)?) })
+    Ok(NowPlayingResponse { track: current(&conn)?.map(|(_, t)| t) })
 }
 
 pub fn control(action: &str, value: Option<f64>) -> Result<()> {
     let conn = connection()?;
-    let Some(p) = player(&conn)? else {
-        return Err(Error::Detector("Spotify is not running".into()));
+    let Some((p, _)) = current(&conn)? else {
+        return Err(Error::Detector("Nothing is playing".into()));
     };
     // Seeking needs the current track ID (and, for a relative seek, the position).
     let (track_id, position_us) = if action == "seek" {
@@ -142,7 +160,7 @@ pub fn control(action: &str, value: Option<f64>) -> Result<()> {
     .map_err(derr)
 }
 
-/// Calls `on_change` whenever Spotify's player properties change (track,
+/// Calls `on_change` whenever a followed player's properties change (track,
 /// play state, position jumps). Returns false when the session bus or the
 /// signal subscription is unavailable.
 pub fn watch(on_change: impl Fn() + Send + 'static) -> bool {
@@ -161,13 +179,20 @@ pub fn watch(on_change: impl Fn() + Send + 'static) -> bool {
         .name("nowplaying-mpris".into())
         .spawn(move || {
             for msg in messages.flatten() {
-                // Every MPRIS player uses the same path; only Spotify's signals count.
-                // Its unique name changes when it restarts, so look it up each time.
+                // Every MPRIS player uses the same path; only the followed ones count.
+                // Signals come from unique names (":1.42"), so find whose they are.
                 let header = msg.header();
                 let Some(sender) = header.sender() else { continue };
-                let is_spotify =
-                    dbus.get_name_owner(bus_name()).map(|owner| owner.as_str() == sender.as_str()).unwrap_or(false);
-                if is_spotify {
+                let followed = dbus.list_names().map(|names| {
+                    names.iter().any(|n| {
+                        sources::mpris_source(n.as_str()).is_some()
+                            && BusName::try_from(n.as_str())
+                                .ok()
+                                .and_then(|b| dbus.get_name_owner(b).ok())
+                                .is_some_and(|owner| owner.as_str() == sender.as_str())
+                    })
+                });
+                if followed.unwrap_or(false) {
                     on_change();
                 }
             }

@@ -1,4 +1,4 @@
-//! MPRIS (Linux) logic that doesn't touch D-Bus: Spotify's `Metadata` map to a
+//! MPRIS (Linux) logic that doesn't touch D-Bus: a player's `Metadata` map to a
 //! [`Track`], and a control action to the MPRIS call that performs it. It has no
 //! D-Bus types, so its tests run on every OS; `desktop/linux.rs` converts the
 //! D-Bus values into [`MetaValue`]s and sends the calls.
@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 
 use crate::models::{spotify_track_id, Track};
+use crate::sources::{Service, Source};
 
 /// The MPRIS metadata value types Spotify uses, without the D-Bus wrapper.
 #[derive(Debug, Clone, PartialEq)]
@@ -82,15 +83,18 @@ fn int_of(meta: &Metadata, key: &str) -> Option<i64> {
     }
 }
 
-/// Maps Spotify's MPRIS state to a [`Track`]. None when stopped, during ads,
-/// or when there is no title.
-pub fn track_from_state(state: &PlayerState) -> Option<Track> {
+/// Maps a player's MPRIS state to a [`Track`]. None when stopped, during Spotify
+/// ads, or when there is no title. A browser's `xesam:url` (when it sends one)
+/// tells a YouTube tab from other media.
+pub fn track_from_state(state: &PlayerState, source: Source) -> Option<Track> {
     let meta = &state.metadata;
     if state.status == "Stopped" {
         return None;
     }
+    let source = source.with_url(str_of(meta, "xesam:url"));
+    let spotify = source.service == Service::Spotify;
     let trackid = str_of(meta, "mpris:trackid").unwrap_or("");
-    if is_ad(trackid) {
+    if spotify && is_ad(trackid) {
         return None;
     }
     let title = str_of(meta, "xesam:title").filter(|t| !t.is_empty())?;
@@ -117,11 +121,12 @@ pub fn track_from_state(state: &PlayerState) -> Option<Track> {
         duration_ms,
         position_ms,
         is_playing: state.status == "Playing",
-        spotify_id: spotify_id_from_trackid(trackid),
+        spotify_id: if spotify { spotify_id_from_trackid(trackid) } else { None },
         volume: state.volume.map(|v| (v * 100.0).round().clamp(0.0, 100.0) as u8),
         artwork_url,
         source: "os".into(),
-        player: "Spotify (Linux)".into(),
+        player: source.player("Linux"),
+        service: Some(source.service.as_str().into()),
     })
 }
 
@@ -156,6 +161,9 @@ pub fn control_call(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const SPOTIFY: Source = Source::new(Service::Spotify, "Spotify");
+    const CHROMIUM: Source = Source::new(Service::Browser, "Chromium");
 
     fn s(v: &str) -> MetaValue {
         MetaValue::Str(v.into())
@@ -209,7 +217,7 @@ mod tests {
 
     #[test]
     fn maps_spotify_metadata() {
-        let t = track_from_state(&spotify_state()).unwrap();
+        let t = track_from_state(&spotify_state(), SPOTIFY).unwrap();
         assert_eq!(t.title, "Never Gonna Give You Up");
         assert_eq!(t.artist, "Rick Astley");
         assert_eq!(t.album.as_deref(), Some("Whenever You Need Somebody"));
@@ -221,6 +229,52 @@ mod tests {
         assert_eq!(t.artwork_url.as_deref(), Some("https://i.scdn.co/image/ab67616d0000b273"));
         assert_eq!(t.source, "os");
         assert_eq!(t.player, "Spotify (Linux)");
+        assert_eq!(t.service.as_deref(), Some("spotify"));
+    }
+
+    fn browser_state(url: Option<&str>) -> PlayerState {
+        let mut metadata: Metadata = [
+            ("mpris:trackid", s("/org/chromium/MediaPlayer2/TrackList/Track1")),
+            ("xesam:title", s("Oasis - Wonderwall (Official Video)")),
+            ("xesam:artist", MetaValue::StrList(vec!["OasisVEVO".into()])),
+            ("mpris:length", MetaValue::Int(258_000_000)),
+            ("mpris:artUrl", s("file:///tmp/.org.chromium.Chromium.abc")),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        if let Some(u) = url {
+            metadata.insert("xesam:url".into(), s(u));
+        }
+        PlayerState { metadata, status: "Playing".into(), position_us: Some(1_000_000), volume: Some(1.0) }
+    }
+
+    #[test]
+    fn maps_a_browser_tab() {
+        let t = track_from_state(&browser_state(None), CHROMIUM).unwrap();
+        assert_eq!(t.title, "Oasis - Wonderwall (Official Video)");
+        assert_eq!(t.artist, "OasisVEVO");
+        assert_eq!(t.player, "Chromium (Linux)");
+        assert_eq!(t.service.as_deref(), Some("browser"));
+        assert_eq!(t.spotify_id, None);
+        // Chromium's artwork is a local file, which the webview can't show.
+        assert_eq!(t.artwork_url, None);
+    }
+
+    #[test]
+    fn a_youtube_url_marks_the_tab_as_youtube() {
+        let t = track_from_state(&browser_state(Some("https://www.youtube.com/watch?v=abc")), CHROMIUM).unwrap();
+        assert_eq!(t.service.as_deref(), Some("youtube"));
+        assert_eq!(t.player, "YouTube (Chromium, Linux)");
+    }
+
+    #[test]
+    fn only_spotify_has_ads_and_spotify_ids() {
+        let mut st = browser_state(None);
+        st.metadata.insert("mpris:trackid".into(), s("spotify:ad:1"));
+        assert!(track_from_state(&st, CHROMIUM).is_some());
+        st.metadata.insert("mpris:trackid".into(), s("/com/spotify/track/abc"));
+        assert_eq!(track_from_state(&st, CHROMIUM).unwrap().spotify_id, None);
     }
 
     #[test]
@@ -228,53 +282,53 @@ mod tests {
         let mut st = spotify_state();
         st.metadata
             .insert("xesam:artist".into(), MetaValue::StrList(vec!["Daft Punk".into(), "Pharrell Williams".into()]));
-        assert_eq!(track_from_state(&st).unwrap().artist, "Daft Punk, Pharrell Williams");
+        assert_eq!(track_from_state(&st, SPOTIFY).unwrap().artist, "Daft Punk, Pharrell Williams");
     }
 
     #[test]
     fn accepts_a_plain_string_artist() {
         let mut st = spotify_state();
         st.metadata.insert("xesam:artist".into(), s("Rick Astley"));
-        assert_eq!(track_from_state(&st).unwrap().artist, "Rick Astley");
+        assert_eq!(track_from_state(&st, SPOTIFY).unwrap().artist, "Rick Astley");
     }
 
     #[test]
     fn paused_is_not_playing() {
         let mut st = spotify_state();
         st.status = "Paused".into();
-        assert!(!track_from_state(&st).unwrap().is_playing);
+        assert!(!track_from_state(&st, SPOTIFY).unwrap().is_playing);
     }
 
     #[test]
     fn stopped_reports_nothing() {
         let mut st = spotify_state();
         st.status = "Stopped".into();
-        assert!(track_from_state(&st).is_none());
+        assert!(track_from_state(&st, SPOTIFY).is_none());
     }
 
     #[test]
     fn ads_report_nothing() {
         let mut st = spotify_state();
         st.metadata.insert("mpris:trackid".into(), s("/com/spotify/ad/123"));
-        assert!(track_from_state(&st).is_none());
+        assert!(track_from_state(&st, SPOTIFY).is_none());
         st.metadata.insert("mpris:trackid".into(), s("spotify:ad:123"));
-        assert!(track_from_state(&st).is_none());
+        assert!(track_from_state(&st, SPOTIFY).is_none());
     }
 
     #[test]
     fn missing_title_reports_nothing() {
         let mut st = spotify_state();
         st.metadata.insert("xesam:title".into(), s(""));
-        assert!(track_from_state(&st).is_none());
+        assert!(track_from_state(&st, SPOTIFY).is_none());
         st.metadata.remove("xesam:title");
-        assert!(track_from_state(&st).is_none());
+        assert!(track_from_state(&st, SPOTIFY).is_none());
     }
 
     #[test]
     fn episodes_have_no_spotify_id() {
         let mut st = spotify_state();
         st.metadata.insert("mpris:trackid".into(), s("/com/spotify/episode/xyz"));
-        let t = track_from_state(&st).unwrap();
+        let t = track_from_state(&st, SPOTIFY).unwrap();
         assert_eq!(t.spotify_id, None);
     }
 
@@ -286,7 +340,7 @@ mod tests {
         }
         st.position_us = None;
         st.volume = None;
-        let t = track_from_state(&st).unwrap();
+        let t = track_from_state(&st, SPOTIFY).unwrap();
         assert_eq!(t.artist, "");
         assert_eq!(t.album, None);
         assert_eq!(t.duration_ms, None);
@@ -300,13 +354,13 @@ mod tests {
         let mut st = spotify_state();
         st.position_us = Some(999_000_000_000);
         st.volume = Some(1.7);
-        let t = track_from_state(&st).unwrap();
+        let t = track_from_state(&st, SPOTIFY).unwrap();
         assert_eq!(t.position_ms, Some(213_573));
         assert_eq!(t.volume, Some(100));
 
         st.position_us = Some(-5);
         st.volume = Some(-0.2);
-        let t = track_from_state(&st).unwrap();
+        let t = track_from_state(&st, SPOTIFY).unwrap();
         assert_eq!(t.position_ms, Some(0));
         assert_eq!(t.volume, Some(0));
     }
@@ -315,7 +369,7 @@ mod tests {
     fn zero_length_is_unknown() {
         let mut st = spotify_state();
         st.metadata.insert("mpris:length".into(), MetaValue::Int(0));
-        assert_eq!(track_from_state(&st).unwrap().duration_ms, None);
+        assert_eq!(track_from_state(&st, SPOTIFY).unwrap().duration_ms, None);
     }
 
     #[test]
@@ -324,7 +378,7 @@ mod tests {
         let mut st = spotify_state();
         st.metadata.insert("mpris:artUrl".into(), s("https://open.spotify.com/image/ab67616d0000b273"));
         assert_eq!(
-            track_from_state(&st).unwrap().artwork_url.as_deref(),
+            track_from_state(&st, SPOTIFY).unwrap().artwork_url.as_deref(),
             Some("https://i.scdn.co/image/ab67616d0000b273")
         );
     }
@@ -333,7 +387,7 @@ mod tests {
     fn ignores_non_http_artwork() {
         let mut st = spotify_state();
         st.metadata.insert("mpris:artUrl".into(), s("file:///tmp/cover.png"));
-        assert_eq!(track_from_state(&st).unwrap().artwork_url, None);
+        assert_eq!(track_from_state(&st, SPOTIFY).unwrap().artwork_url, None);
     }
 
     #[test]

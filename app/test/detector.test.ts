@@ -32,6 +32,12 @@ describe("read", () => {
     expect(s.detector.status).toEqual({ kind: "ok" });
   });
 
+  it("reads a YouTube video as the song it is", async () => {
+    const s = setup();
+    device(track("Muse - Uprising (Official Video)", { artist: "MuseVEVO", service: "youtube", player: "YouTube (Chrome, macOS)" }));
+    expect(await s.detector.read()).toMatchObject({ title: "Uprising", artist: "Muse", service: "youtube" });
+  });
+
   it("treats a missing track field as nothing playing", async () => {
     const s = setup();
     core.invoke.mockResolvedValue({});
