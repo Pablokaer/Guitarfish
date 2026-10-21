@@ -7,9 +7,11 @@
 | **Linux** (x86_64) | `Guitarfish_<version>_amd64.AppImage` or `Guitarfish_<version>_amd64.deb` (Debian, Ubuntu) |
 | **Android** 7.0+ | `Guitarfish_<version>_android_universal.apk` |
 
+**New in this version:** Guitarfish follows YouTube as well as Spotify, on every platform: the YouTube app, YouTube Music, or a video in your browser. A video is read as its song ("Oasis - Wonderwall (Official Video)" becomes *Wonderwall* by *Oasis*) to find its tab.
+
 Guitarfish runs entirely on your device, with no server to install. It searches Songsterr itself (that needs an internet connection), and the tabs you import (Guitar Pro, alphaTex or MusicXML: Tools sidebar → *Import tab…*) are stored on the device.
 
-It also plays your own MP3 files (*Music* in the sidebar): playlists, a speed control from 0.25× to 1.5× that keeps the pitch, and an A–B loop to practise one passage. Their tabs are found the same way as for Spotify songs.
+It also plays your own MP3 files (*Music* in the sidebar): playlists, a speed control from 0.25× to 1.5× that keeps the pitch, and an A–B loop to practise one passage. Their tabs are found the same way as for the songs you play on YouTube or Spotify.
 
 ### First launch
 
