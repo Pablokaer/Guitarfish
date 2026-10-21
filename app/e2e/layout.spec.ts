@@ -26,6 +26,19 @@ test("sidebars hide and show, and the layout persists across reloads", async ({ 
   await expect(tools).toHaveAttribute("data-visible", "true");
 });
 
+test("a short window scrolls the navigation sidebar instead of clipping it", async ({ page, tauri }) => {
+  await page.setViewportSize({ width: 1100, height: 420 });
+  await openApp(page, tauri);
+  const compact = page.getByRole("button", { name: "Compact sidebar" });
+  await expect(compact).not.toBeInViewport();
+  // Scroll the way a user does: programmatic scrolling reaches even a clipped panel.
+  await page.locator("#nav .brand").hover();
+  await page.mouse.wheel(0, 2000);
+  await expect(compact).toBeInViewport();
+  await compact.click();
+  await expect(page.locator("#nav")).toHaveAttribute("data-state", "compact");
+});
+
 test("Focus Mode hides everything, survives a reload, and Esc exits it", async ({ page, tauri }) => {
   await openApp(page, tauri);
   // Start from a customised layout, which Focus Mode must give back.
