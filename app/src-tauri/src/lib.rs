@@ -1,3 +1,4 @@
+mod localaudio;
 mod songkey;
 mod songsterr;
 
@@ -41,15 +42,24 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_nowplaying::init())
-        .invoke_handler(tauri::generate_handler![songsterr::songsterr_search, songkey::song_key])
+        .invoke_handler(tauri::generate_handler![
+            songsterr::songsterr_search,
+            songkey::song_key,
+            localaudio::local_audio_open,
+            localaudio::local_audio_read
+        ])
         .setup(|_app| {
             #[cfg(target_os = "macos")]
             layout_menu(_app)?;
             Ok(())
         });
-    // In-app updates and the relaunch after them are desktop only.
+    // In-app updates and the relaunch after them, and the file picker of the music
+    // library, are desktop only (Android picks files with the webview's own input).
     #[cfg(desktop)]
-    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build()).plugin(tauri_plugin_process::init());
+    let builder = builder
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init());
     // Menus exist on desktop only (the Android build has no on_menu_event).
     #[cfg(desktop)]
     let builder = builder.on_menu_event(|app, event| {

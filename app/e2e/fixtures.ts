@@ -84,10 +84,27 @@ export class FakeTauri {
   capabilities = { transport: true, seek: true, volume: false, events: false };
   /** The tabs on the device when the test's page first loads. */
   seed: SeedTab[] = [...CATALOGUE];
+  /** MP3 files on the fake disk, by path: what local_audio_open/read and the asset protocol see. */
+  files: Record<string, Uint8Array> = {};
+  /** What the system file picker returns (plugin:dialog|open). */
+  picked: string[] = [];
   calls: Call[] = [];
 
   async install(page: Page): Promise<void> {
     await page.exposeFunction("__e2eInvoke", (cmd: string, args: Record<string, unknown>) => this.handle(cmd, args));
+    // The asset protocol: local files streamed to the audio element, with range
+    // requests like Tauri's (without them Chromium can't seek).
+    await page.route("http://asset.localhost/**", (route) => {
+      const path = decodeURIComponent(new URL(route.request().url()).pathname.slice(1));
+      const f = this.files[path];
+      if (!f) return route.fulfill({ status: 404 });
+      const headers = { "Content-Type": "audio/mpeg", "Accept-Ranges": "bytes" };
+      const range = /bytes=(\d+)-(\d*)/.exec(route.request().headers()["range"] ?? "");
+      if (!range) return route.fulfill({ status: 200, body: Buffer.from(f), headers });
+      const start = Number(range[1]);
+      const end = range[2] ? Math.min(Number(range[2]), f.length - 1) : f.length - 1;
+      return route.fulfill({ status: 206, body: Buffer.from(f.subarray(start, end + 1)), headers: { ...headers, "Content-Range": `bytes ${start}-${end}/${f.length}` } });
+    });
     await page.addInitScript((seed) => (window.__e2eSeed = seed), this.seed);
     await page.addInitScript({ content: MOCK_SCRIPT });
   }
@@ -120,6 +137,22 @@ export class FakeTauri {
         return this.songKeys[`${args.artist}|${args.title}`] ?? null;
       case "plugin:app|version":
         return "0.4.0";
+      case "plugin:dialog|open":
+        return this.picked;
+      case "local_audio_open":
+        return (args.paths as string[]).map((path) => {
+          const name = path.split("/").pop()!;
+          const f = this.files[path];
+          const error = !/\.mp3$/i.test(path) ? "not an .mp3 file" : f ? null : "the file is no longer there";
+          return { path, name, size: error ? null : f.length, error };
+        });
+      case "local_audio_read": {
+        const f = this.files[String(args.path)];
+        if (!f) throw new Error("can't open the file");
+        const offset = Number(args.offset);
+        // The page turns this into an ArrayBuffer, like the real command's answer (tauri-mock.ts).
+        return { base64: Buffer.from(f.subarray(offset, offset + Number(args.len))).toString("base64") };
+      }
       default:
         // Player controls, the opener, and the native webview/window plumbing.
         return null;

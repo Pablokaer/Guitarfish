@@ -34,6 +34,15 @@ const PATHS = {
   scale: '<path d="M3 18h18"/><path d="M3 12h18"/><path d="M3 6h18"/><circle fill="currentColor" cx="7" cy="12" r="1.8"/><circle fill="currentColor" cx="12" cy="6" r="1.8"/><circle fill="currentColor" cx="16" cy="18" r="1.8"/>',
   mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/>',
   layers: '<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>',
+  disc: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/><path d="M7.5 9.5a5 5 0 0 1 2-2"/>',
+  playlist: '<path d="M3 6h12M3 12h12M3 18h7"/><path d="M17 18V9l4-1"/><circle cx="15.5" cy="18" r="1.8"/>',
+  shuffle: '<path d="M3 7h3.5a4 4 0 0 1 3.3 1.7l4.4 6.6a4 4 0 0 0 3.3 1.7H21"/><path d="M3 17h3.5a4 4 0 0 0 3.3-1.7l.5-.8M14 8.5l.2-.3A4 4 0 0 1 17.5 7H21"/><path d="m18 4 3 3-3 3"/><path d="m18 14 3 3-3 3"/>',
+  repeat: '<path d="m17 2 3 3-3 3"/><path d="M4 11v-1a5 5 0 0 1 5-5h11"/><path d="m7 22-3-3 3-3"/><path d="M20 13v1a5 5 0 0 1-5 5H4"/>',
+  repeatOne: '<path d="m17 2 3 3-3 3"/><path d="M4 11v-1a5 5 0 0 1 5-5h11"/><path d="m7 22-3-3 3-3"/><path d="M20 13v1a5 5 0 0 1-5 5H4"/><path d="M11 10.5 12.5 9.5V15"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  grip: '<circle fill="currentColor" stroke="none" cx="9" cy="6" r="1.4"/><circle fill="currentColor" stroke="none" cx="15" cy="6" r="1.4"/><circle fill="currentColor" stroke="none" cx="9" cy="12" r="1.4"/><circle fill="currentColor" stroke="none" cx="15" cy="12" r="1.4"/><circle fill="currentColor" stroke="none" cx="9" cy="18" r="1.4"/><circle fill="currentColor" stroke="none" cx="15" cy="18" r="1.4"/>',
+  edit: '<path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z"/><path d="m14.5 7.5 3 3"/>',
+  bars: '<path d="M6 20v-6M10 20V8M14 20v-9M18 20V5"/>',
 } as const;
 
 export type IconName = keyof typeof PATHS;

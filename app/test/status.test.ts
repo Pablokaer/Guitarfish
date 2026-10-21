@@ -36,4 +36,13 @@ describe("syncStatus", () => {
       expect(syncStatus({ ...base, phase }).label).not.toBe("Tablature found");
     }
   });
+
+  it("in local mode, ignores Spotify errors and speaks of the local player", () => {
+    const local = { ...base, mode: "local" as const };
+    expect(syncStatus({ ...local, detectorError: "Spotify not running" }).label).toBe("Local player");
+    expect(syncStatus({ ...local, hasTrack: false })).toEqual({ tone: "idle", label: "Nothing playing", detail: "Play a song from Music" });
+    expect(syncStatus({ ...local, phase: "paused" }).label).toBe("Local player");
+    expect(syncStatus({ ...local, isPlaying: false })).toEqual({ tone: "ok", label: "Local player", detail: "Paused" });
+    expect(syncStatus({ ...local, phase: "found" }).label).toBe("Tablature found");
+  });
 });

@@ -27,12 +27,15 @@
             </div>
             <ul class="nav-list">
               <li><button class="nav-item" data-view="tab" title="Now Playing" aria-label="Now Playing"><i data-icon="nowPlaying"></i><span class="label">Now Playing</span></button></li>
+              <li><button class="nav-item" data-view="music" title="Music: your MP3 library" aria-label="Music"><i data-icon="disc"></i><span class="label">Music</span></button></li>
               <li><button class="nav-item" data-view="solos" title="Solos: scales in the song's key" aria-label="Solos"><i data-icon="scale"></i><span class="label">Solos</span></button></li>
               <li><button class="nav-item" data-view="search" title="Search (⌘K)" aria-label="Search"><i data-icon="search"></i><span class="label">Search</span></button></li>
               <li><button class="nav-item" data-view="history" title="History" aria-label="History"><i data-icon="history"></i><span class="label">History</span></button></li>
               <li><button class="nav-item" data-view="favorites" title="Favorites" aria-label="Favorites"><i data-icon="star"></i><span class="label">Favorites</span></button></li>
               <li><button class="nav-item" data-view="catalogue" title="My tabs" aria-label="My tabs"><i data-icon="layers"></i><span class="label">My tabs</span></button></li>
             </ul>
+            <div class="nav-section nav-section-row label"><span>Playlists</span><button id="btn-new-playlist" class="icon-btn tiny" type="button" title="New playlist" aria-label="New playlist"><i data-icon="plus" data-size="14"></i></button></div>
+            <ul id="playlists" class="recent playlists"></ul>
             <div class="nav-section label">Recent Tabs</div>
             <ul id="recent" class="recent"></ul>
             <ul id="nav-actions" class="nav-list nav-actions" hidden>
@@ -105,12 +108,35 @@
             </div>
 
             <section class="card">
-              <h3><i data-icon="music" data-size="15"></i>Spotify</h3>
+              <h3><i data-icon="music" data-size="15"></i><span id="tools-player-title">Spotify</span></h3>
               <div class="kv"><span>Status</span><span id="tools-status" class="status-text" data-tone="idle">Waiting for playback</span></div>
               <div class="kv"><span>Source</span><span id="tools-source" class="muted">—</span></div>
               <p id="tools-status-detail" class="hint" hidden></p>
-              <label class="switch-row"><span>Follow Spotify<small>Open the tab of each new song</small></span><input id="set-follow-spotify" type="checkbox" class="switch" /></label>
+              <label class="switch-row"><span>Follow playback<small>Open the tab of each new song</small></span><input id="set-follow-spotify" type="checkbox" class="switch" /></label>
               <label class="switch-row"><span>Automatic tab search<small>Search Songsterr when the song changes</small></span><input id="set-auto-search" type="checkbox" class="switch" /></label>
+            </section>
+
+            <section id="mp3-card" class="card" hidden>
+              <h3><i data-icon="disc" data-size="15"></i>MP3 practice</h3>
+              <label class="range-row">Speed <output id="mp3-speed-out">1.00×</output>
+                <input id="mp3-speed" type="range" min="0.25" max="1.5" step="0.05" value="1" aria-label="Playback speed" /></label>
+              <div id="mp3-speed-presets" class="segmented" role="group" aria-label="Speed presets"></div>
+              <p class="hint">The pitch stays the same at any speed.</p>
+              <div class="card-sub">A–B loop</div>
+              <div class="kv"><span>Loop</span><span id="mp3-loop-text">Off</span></div>
+              <div class="practice-row">
+                <button id="mp3-set-a" class="btn small" type="button" title="Loop start at the current position">Set A</button>
+                <button id="mp3-set-b" class="btn small" type="button" title="Loop end at the current position">Set B</button>
+                <button id="mp3-clear-loop" class="btn small" type="button">Clear</button>
+              </div>
+              <p class="hint">Or press <kbd>L</kbd> at the start, again at the end, and once more to stop looping.</p>
+              <div class="card-sub">Tab search</div>
+              <form id="mp3-details" class="mp3-details">
+                <label class="field">Title<input id="mp3-title" type="text" autocomplete="off" /></label>
+                <label class="field">Artist<input id="mp3-artist" type="text" autocomplete="off" /></label>
+                <button class="btn small" type="submit">Save and search again</button>
+              </form>
+              <p class="hint">Fix the title and artist if the tab found isn't right. Only the library changes, not the file.</p>
             </section>
 
             <section class="card">
@@ -166,7 +192,7 @@
 
             <section class="card">
               <h3><i data-icon="sidebarRight" data-size="15"></i>Layout</h3>
-              <label class="switch-row"><span>Spotify player</span><input id="lay-player" type="checkbox" class="switch" /></label>
+              <label class="switch-row"><span>Player</span><input id="lay-player" type="checkbox" class="switch" /></label>
               <label class="switch-row"><span>Expanded player</span><input id="lay-player-expanded" type="checkbox" class="switch" /></label>
               <label class="switch-row"><span>Navigation sidebar</span><input id="lay-nav" type="checkbox" class="switch" /></label>
               <label class="switch-row"><span>Compact navigation</span><input id="lay-nav-compact" type="checkbox" class="switch" /></label>
@@ -196,6 +222,13 @@
                 <dt>Tools sidebar</dt><dd><kbd>⌘</kbd><kbd>3</kbd></dd>
                 <dt>Toolbar</dt><dd><kbd>⌘</kbd><kbd>4</kbd></dd>
                 <dt>Search</dt><dd><kbd>⌘</kbd><kbd>K</kbd></dd>
+                <dt>Play/pause (MP3)</dt><dd><kbd>Space</kbd></dd>
+                <dt>Back/forward 5 s (MP3)</dt><dd><kbd>←</kbd><kbd>→</kbd></dd>
+                <dt>Previous/next song (MP3)</dt><dd><kbd>⇧</kbd><kbd>←</kbd><kbd>→</kbd></dd>
+                <dt>Slower/faster (MP3)</dt><dd><kbd>[</kbd><kbd>]</kbd></dd>
+                <dt>Normal speed (MP3)</dt><dd><kbd>0</kbd></dd>
+                <dt>A–B loop (MP3)</dt><dd><kbd>L</kbd></dd>
+                <dt>Mute (MP3)</dt><dd><kbd>M</kbd></dd>
               </dl>
               <p class="hint">Esc only works while Guitarfish (not the Songsterr page) has keyboard focus, so it never interferes with Songsterr.</p>
             </section>
@@ -204,6 +237,9 @@
       </div>
 
       <!-- ============ Bottom: Spotify player (expanded / collapsed strip / hidden) ============ -->
+      <!-- The local MP3 player's audio element (localplayer.ts). -->
+      <audio id="local-audio" preload="metadata" hidden></audio>
+
       <footer id="player" class="player" data-state="expanded">
         <div class="player-full">
           <div class="np">
@@ -215,14 +251,26 @@
           </div>
 
           <div class="transport">
-            <div id="transport-buttons" class="transport-buttons" hidden>
-              <button id="btn-prev" class="icon-btn" type="button" title="Previous track" aria-label="Previous track"><i data-icon="prev" data-size="18"></i></button>
-              <button id="btn-play" class="play-btn" type="button" title="Play" aria-label="Play"><i data-icon="play" data-size="18"></i></button>
-              <button id="btn-next" class="icon-btn" type="button" title="Next track" aria-label="Next track"><i data-icon="next" data-size="18"></i></button>
+            <div class="transport-row">
+              <!-- Local player only: speed, shuffle/repeat and the A–B loop. -->
+              <div id="speed-chip" class="speed-chip local-only" role="group" aria-label="Playback speed">
+                <button id="btn-slower" type="button" title="Slower ([)" aria-label="Slower">−</button>
+                <button id="btn-speed" type="button" title="Back to 1.00× (0)" aria-label="Playback speed, reset to normal">1.00×</button>
+                <button id="btn-faster" type="button" title="Faster (])" aria-label="Faster">+</button>
+              </div>
+              <div id="transport-buttons" class="transport-buttons" hidden>
+                <button id="btn-shuffle" class="icon-btn small local-only" type="button" title="Shuffle" aria-label="Shuffle" aria-pressed="false"><i data-icon="shuffle" data-size="16"></i></button>
+                <button id="btn-prev" class="icon-btn" type="button" title="Previous track" aria-label="Previous track"><i data-icon="prev" data-size="18"></i></button>
+                <button id="btn-play" class="play-btn" type="button" title="Play" aria-label="Play"><i data-icon="play" data-size="18"></i></button>
+                <button id="btn-next" class="icon-btn" type="button" title="Next track" aria-label="Next track"><i data-icon="next" data-size="18"></i></button>
+                <button id="btn-repeat" class="icon-btn small local-only" type="button" title="Repeat: off" aria-label="Repeat: off" aria-pressed="false"><i data-icon="repeat" data-size="16"></i></button>
+              </div>
+              <button id="btn-loop" class="loop-btn local-only" type="button" title="A–B loop: set A (L)" aria-label="A–B loop: set A" aria-pressed="false">A–B</button>
             </div>
             <div class="timeline">
               <span id="np-pos" class="time">–:––</span>
-              <div id="np-progress" class="progress" role="progressbar" aria-label="Playback position" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+              <div id="np-progress" class="progress" role="slider" aria-label="Playback position" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div id="np-loop" class="progress-loop" hidden></div>
                 <div id="np-progress-fill" class="progress-fill"></div>
               </div>
               <span id="np-dur" class="time">–:––</span>
@@ -232,7 +280,11 @@
           <div class="player-side">
             <div id="volume" class="volume" hidden>
               <button id="btn-mute" class="icon-btn small" type="button" title="Mute" aria-label="Mute"><i data-icon="volume" data-size="16"></i></button>
-              <input id="volume-range" type="range" min="0" max="100" step="1" value="50" aria-label="Spotify volume" />
+              <input id="volume-range" type="range" min="0" max="100" step="1" value="50" aria-label="Volume" />
+            </div>
+            <div id="mode-switch" class="segmented mode-switch" role="group" aria-label="Player">
+              <button type="button" data-mode="spotify" aria-pressed="true" title="Follow Spotify on this device">Spotify</button>
+              <button type="button" data-mode="local" aria-pressed="false" title="Play your MP3 files">Local</button>
             </div>
             <span id="status-pill" class="status-pill" data-tone="idle" role="status" aria-live="polite"><span class="dot"></span><span class="status-label">Waiting for playback</span></span>
             <button id="btn-player-collapse" class="icon-btn small" type="button" title="Collapse player (⌘2)" aria-label="Collapse player"><i data-icon="chevronDown" data-size="16"></i></button>

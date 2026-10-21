@@ -18,16 +18,23 @@ export interface SyncStatus {
 }
 
 export interface StatusInput {
+  /** Which player is followed; Spotify when not given. */
+  mode?: "spotify" | "local";
   detectorError: string | null;
   hasTrack: boolean;
   isPlaying: boolean;
   phase: SearchPhase;
 }
 
-/** One status for the whole pipeline, most important problem first. */
-export function syncStatus({ detectorError, hasTrack, isPlaying, phase }: StatusInput): SyncStatus {
-  if (detectorError) return { tone: "error", label: "Spotify connection error", detail: detectorError };
-  if (!hasTrack) return { tone: "idle", label: "Waiting for playback", detail: "Play a song in Spotify" };
+/**
+ * One status for the whole pipeline, most important problem first. In local mode
+ * Spotify isn't read, so its errors don't count.
+ */
+export function syncStatus({ mode = "spotify", detectorError, hasTrack, isPlaying, phase }: StatusInput): SyncStatus {
+  const local = mode === "local";
+  if (detectorError && !local) return { tone: "error", label: "Spotify connection error", detail: detectorError };
+  if (!hasTrack) return local ? { tone: "idle", label: "Nothing playing", detail: "Play a song from Music" } : { tone: "idle", label: "Waiting for playback", detail: "Play a song in Spotify" };
+  const connected = local ? "Local player" : "Connected to Spotify";
   switch (phase) {
     case "searching":
       return { tone: "busy", label: "Searching Songsterr…" };
@@ -42,8 +49,8 @@ export function syncStatus({ detectorError, hasTrack, isPlaying, phase }: Status
     case "offline":
       return { tone: "error", label: "Songsterr unreachable", detail: "You may be offline, or Songsterr isn't answering. Retrying…" };
     case "paused":
-      return { tone: "idle", label: "Connected to Spotify", detail: "Automatic tab search is off" };
+      return { tone: "idle", label: connected, detail: "Automatic tab search is off" };
     case "idle":
-      return { tone: "ok", label: "Connected to Spotify", detail: isPlaying ? undefined : "Paused" };
+      return { tone: "ok", label: connected, detail: isPlaying ? undefined : "Paused" };
   }
 }

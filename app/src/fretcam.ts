@@ -1,5 +1,6 @@
 import type { ClipRecorder } from "./clip";
 import { TRACK_W, type Miss } from "./follower";
+import { escapeHtml as esc } from "./html";
 import { CropPlan, modelScale, shrunk, type Crop } from "./neckcrop";
 import { DEFAULT_CAM, fretDistance, NeckMap, parseCamSettings, type Calibration, type CamSettings, type Pt } from "./neckmap";
 import type { NeckRequest, NeckResult } from "./neckworker";
@@ -65,10 +66,6 @@ function loadSettings(): CamSettings {
   } catch {
     return { ...DEFAULT_CAM };
   }
-}
-
-function esc(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 }
 
 export class FretCam {
