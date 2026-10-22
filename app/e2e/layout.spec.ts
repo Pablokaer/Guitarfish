@@ -39,6 +39,50 @@ test("a short window scrolls the navigation sidebar instead of clipping it", asy
   await expect(page.locator("#nav")).toHaveAttribute("data-state", "compact");
 });
 
+test("in a short window long lists scroll on their own, and compact mode drops them", async ({ page, tauri }) => {
+  await page.setViewportSize({ width: 1100, height: 600 });
+  const history = Array.from({ length: 8 }, (_, i) => ({ url: `https://www.songsterr.com/a/wa/song?id=${i + 1}`, songId: i + 1, title: `Song ${i + 1}`, artist: "Band", at: Date.now() - i * 60_000 }));
+  await openApp(page, tauri, { "tabsync.history": history });
+  // Twelve playlists, written where the app keeps them; the reload shows them.
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        const open = indexedDB.open("guitarfish-music");
+        open.onsuccess = () => {
+          const tx = open.result.transaction("playlists", "readwrite");
+          for (let i = 1; i <= 12; i++) tx.objectStore("playlists").add({ name: `Playlist ${i}`, trackIds: [], createdAt: i });
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+        };
+        open.onerror = () => reject(open.error);
+      }),
+  );
+  await page.reload();
+  await expect(page.locator("#playlists li")).toHaveCount(12);
+  await expect(page.locator("#recent li")).toHaveCount(8);
+
+  const overflow = (sel: string) => page.locator(sel).evaluate((el) => el.scrollHeight - el.clientHeight);
+  // Each list shrinks to its floor (about two rows) and scrolls inside itself, so the sidebar as a
+  // whole only scrolls by what the fixed items need (with the lists at full length it was ~800 px).
+  for (const list of ["#playlists", "#recent"]) {
+    expect(await overflow(list)).toBeGreaterThan(0);
+    expect(await page.locator(list).evaluate((el) => el.clientHeight)).toBeLessThanOrEqual(90);
+  }
+  expect(await overflow("#nav .nav-inner")).toBeLessThan(200);
+  const compact = page.getByRole("button", { name: "Compact sidebar" });
+  await page.locator("#nav .brand").hover();
+  await page.mouse.wheel(0, 300);
+  await expect(compact).toBeInViewport();
+
+  // Compact: no room for the lists. They leave the layout, and the narrow sidebar fits.
+  await compact.click();
+  await expect(page.locator("#nav")).toHaveAttribute("data-state", "compact");
+  await expect(page.locator("#playlists")).toBeHidden();
+  await expect(page.locator("#recent")).toBeHidden();
+  expect(await overflow("#nav .nav-inner")).toBeLessThanOrEqual(1);
+  await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeInViewport();
+});
+
 test("Focus Mode hides everything, survives a reload, and Esc exits it", async ({ page, tauri }) => {
   await openApp(page, tauri);
   // Start from a customised layout, which Focus Mode must give back.
