@@ -240,13 +240,18 @@ kbd { display: inline-block; min-width: 18px; padding: 1px 5px; border-radius: 4
 }
 .nav[data-state="compact"] { width: var(--nav-compact-w); }
 .nav[data-state="hidden"] { width: 0; border-right-color: transparent; }
+/* Scrolls as a whole only once the lists below can't shrink further (see .recent). The
+   gutter is reserved so the content doesn't shift when the scrollbar comes and goes. */
 .nav-inner {
   width: var(--nav-w); height: 100%; display: flex; flex-direction: column; padding: 14px 12px 10px;
-  overflow: hidden auto; container-type: size;
+  overflow: hidden auto; scrollbar-width: thin; scrollbar-gutter: stable;
 }
-.nav[data-state="compact"] .nav-inner { width: var(--nav-compact-w); }
+/* 64px leave no room for a scrollbar: compact scrolls with the wheel only. */
+.nav[data-state="compact"] .nav-inner { width: var(--nav-compact-w); scrollbar-width: none; scrollbar-gutter: auto; }
 .label { transition: opacity var(--t) var(--ease); white-space: nowrap; }
-.nav[data-state="compact"] .label, .nav[data-state="compact"] .recent { opacity: 0; pointer-events: none; }
+.nav[data-state="compact"] .label { opacity: 0; pointer-events: none; }
+/* Compact has no room for the lists: take them (and their headings) out of the layout. */
+.nav[data-state="compact"] .recent, .nav[data-state="compact"] .nav-section { display: none; }
 
 .brand { display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 8px; margin-bottom: 14px; }
 .brand-mark { flex: none; width: 24px; height: 24px; object-fit: contain; }
@@ -271,9 +276,12 @@ kbd { display: inline-block; min-width: 18px; padding: 1px 5px; border-radius: 4
 .nav-section { margin: 22px 10px 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }
 .nav-section-row { display: flex; align-items: center; justify-content: space-between; margin-right: 4px; }
 .nav-section-row .icon-btn { color: var(--faint); }
-/* Playlists take what they need, up to a third of the sidebar; Recent Tabs get the rest. */
+/* Playlists take what they need, up to a third of the sidebar; Recent Tabs get the rest.
+   Each list scrolls on its own down to about two rows; below that the whole sidebar scrolls. */
 .recent.playlists { flex: 0 1 auto; max-height: 33%; }
-.recent { flex: 1; min-height: 0; overflow-y: auto; display: grid; align-content: start; gap: 1px; transition: opacity var(--t) var(--ease); }
+.recent { flex: 1 1 0; min-height: 88px; overflow-y: auto; display: grid; align-content: start; gap: 1px; transition: opacity var(--t) var(--ease); }
+/* A short list (empty, or one or two items) keeps its own height: no floor, no blank space. */
+.recent:not(:has(> li:nth-child(3))) { flex: none; min-height: 0; }
 .recent button { width: 100%; display: grid; gap: 1px; padding: 7px 10px; border-radius: var(--radius-sm); text-align: left; }
 .recent button:hover { background: var(--hover); }
 .recent button[aria-current="true"] { background: var(--elevated); }
@@ -281,11 +289,6 @@ kbd { display: inline-block; min-width: 18px; padding: 1px 5px; border-radius: 4
 .recent .r-title { font-size: 12.5px; }
 .recent .r-artist { font-size: 11.5px; color: var(--muted); }
 .recent .r-empty { padding: 6px 10px; color: var(--faint); font-size: 12px; }
-/* Too short for the lists to scroll on their own: everything flows into one
-   column that scrolls as a whole, so the bottom items are never clipped. */
-@container (max-height: 640px) {
-  .recent, .recent.playlists { flex: none; max-height: none; overflow: visible; }
-}
 .nav-actions { padding: 8px 0; border-top: 1px solid var(--border); }
 .nav-item:disabled { opacity: 0.6; cursor: progress; }
 .nav-item:disabled:hover { background: none; color: var(--muted); }
