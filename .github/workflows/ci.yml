@@ -48,7 +48,7 @@ jobs:
       matrix:
         # macos-15, not macos-latest (macos-26): since early November 2026 GitHub often
         # can't hand out a macos-latest runner and cancels the job after 15 minutes.
-        os: [macos-15, windows-latest, ubuntu-24.04]
+        os: [macos-15, macos-14, macos-15-intel, macos-26, windows-latest, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
