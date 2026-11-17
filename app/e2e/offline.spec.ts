@@ -8,7 +8,7 @@ test("save the Songsterr page for offline, find it under Offline, and read it th
   await openApp(page, tauri);
   await expect.poll(() => tauri.embedded().length).toBeGreaterThan(0);
 
-  const save = page.getByRole("button", { name: "Save for offline" }).first();
+  const save = page.locator("#btn-save-offline");
   await expect(save).toBeEnabled();
   await save.click();
   await expect(page.locator("#banner")).toContainText("Saved “Wonderwall” for offline");
@@ -28,10 +28,14 @@ test("save the Songsterr page for offline, find it under Offline, and read it th
   await page.getByRole("button", { name: "Zoom in" }).click();
   await expect(page.getByRole("button", { name: "Zoom, reset to 100%" })).toHaveText("110%");
 
-  // Saving the same page again replaces the copy instead of adding one.
+  // A saved page is saved once: its buttons say so and do nothing.
   await nav(page, "Now Playing");
-  await save.click();
-  await expect(page.locator("#banner")).toContainText("Saved “Wonderwall” for offline");
+  await expect(save).toBeDisabled();
+  await expect(save).toHaveAttribute("aria-label", "Saved for offline");
+  await expect(page.locator("#btn-save-offline-2")).toBeDisabled();
+  await expect(page.locator("#btn-save-offline-2")).toContainText("Saved offline");
+  await save.click({ force: true });
+  expect(tauri.callsTo("snapshot_webview")).toHaveLength(1);
   await nav(page, "Offline");
   await expect(page.locator("#page .row")).toHaveCount(1);
 
@@ -40,6 +44,10 @@ test("save the Songsterr page for offline, find it under Offline, and read it th
   await del.click();
   await del.click();
   await expect(page.locator("#page")).toContainText("No pages saved yet");
+  // Deleted, it can be saved again.
+  await nav(page, "Now Playing");
+  await expect(save).toBeEnabled();
+  await expect(save).toHaveAttribute("aria-label", "Save for offline");
 });
 
 test("offline, the playing song's saved copy opens by itself", async ({ page, tauri }) => {

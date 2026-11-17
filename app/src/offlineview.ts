@@ -17,6 +17,8 @@ export interface OfflineViewDeps {
   elsewhere(): { tabs: Promise<number>; songs: number };
   openMyTabs(): void;
   openMusic(): void;
+  /** Called after a saved page is deleted. */
+  changed?(): void;
   storage?: Pick<Storage, "getItem" | "setItem">;
 }
 
@@ -145,6 +147,7 @@ export class OfflineView {
       del.disabled = true;
       try {
         await (await this.deps.store()).remove(p.id);
+        this.deps.changed?.();
         await this.showList({ text: `Deleted the saved page of “${p.title}”.`, tone: "info" });
       } catch (e) {
         del.disabled = false;
