@@ -16,6 +16,8 @@ import { MusicLibrary, type LocalTrack, type Playlist } from "./music";
 import { fromBlobFile, importFiles, importSummary, isMp3Name, type ImportFile } from "./musicimport";
 import { formatSpeed, formatTime, playerKey, SEEK_STEP_MS, type PlayerKey } from "./musicui";
 import { MusicView } from "./musicview";
+import { findForTrack, formatSize, OfflineStore, parseSnapshot, type SavedPage } from "./offline";
+import { OfflineView } from "./offlineview";
 import { Playback } from "./playback";
 import { nextRepeat } from "./queue";
 import { canLookUpKeys, lookUpSongKey } from "./songkey";
@@ -152,6 +154,8 @@ const el = {
   fav2: $<HTMLButtonElement>("btn-fav-2"),
   importTab: $<HTMLButtonElement>("btn-import"),
   myTabs: $<HTMLButtonElement>("btn-my-tabs"),
+  saveOffline: $<HTMLButtonElement>("btn-save-offline"),
+  saveOffline2: $<HTMLButtonElement>("btn-save-offline-2"),
   localCard: $("local-card"),
   tabSelect: $<HTMLSelectElement>("tab-select"),
   setFollow: $<HTMLInputElement>("set-follow"),
@@ -302,7 +306,7 @@ const sync = new SyncController({
       songChangedForSolos();
     },
     status: () => renderStatus(),
-    openSongsterr: (r) => void openSongsterr(r, "auto"),
+    openSongsterr: (r) => void followSongsterr(r),
     localMatch: (song, how) => openSong(song, how),
     localMiss: (track, candidates) => showLocalMiss(track, candidates),
     renderStage: () => renderStage(),
@@ -311,7 +315,7 @@ const sync = new SyncController({
 });
 
 // ---- State ---------------------------------------------------------------------
-type View = "tab" | "solos" | "search" | "history" | "favorites" | "catalogue" | "import" | "music" | "playlist";
+type View = "tab" | "solos" | "search" | "history" | "favorites" | "catalogue" | "import" | "music" | "playlist" | "offline" | "offline-page";
 type Source = "songsterr" | "local";
 
 let layout: LayoutState = loadLayout();
@@ -451,8 +455,9 @@ function renderStage() {
     if (src === "local") void embed.hide("local");
     else void embed.show("local");
   }
+  const navView = view === "offline-page" ? "offline" : view;
   for (const b of el.navItems) {
-    if (b.dataset.view === view) b.setAttribute("aria-current", "page");
+    if (b.dataset.view === navView) b.setAttribute("aria-current", "page");
     else b.removeAttribute("aria-current");
   }
   renderPlaylistsNav();
@@ -471,6 +476,8 @@ function setView(v: View) {
   if (v === "favorites") renderEntryPage("favorites");
   if (v === "catalogue") void renderCataloguePage();
   if (v === "music") musicView.show({ kind: "library" });
+  if (v === "offline") void offlineView.showList();
+  else if (v !== "offline-page") offlineView.leave();
   if (v === "solos") renderSolosPage();
   else fretcam.close();
   renderStage();
@@ -482,6 +489,91 @@ function setSource(src: Source) {
   saveSettings(settings);
   if (src === "songsterr" && !shown && sync.best) void openSongsterr(sync.best, "auto");
   setView("tab");
+}
+
+// ---- Offline copies of Songsterr pages -----------------------------------------------
+let offlineOpen: Promise<OfflineStore> | null = null;
+/** The saved pages (IndexedDB), opened on first use; a failed open is retried next time. */
+function offline(): Promise<OfflineStore> {
+  offlineOpen ??= OfflineStore.open().catch((e: unknown) => {
+    offlineOpen = null;
+    throw e;
+  });
+  return offlineOpen;
+}
+
+const offlineView = new OfflineView({
+  root: el.page,
+  store: offline,
+  openOnline: (p) => void openSongsterr({ songId: p.songId, title: p.title, artist: p.artist, instruments: [], url: p.url }, "manual"),
+  elsewhere: () => ({ tabs: catalogue().then((c) => c.songs()).then((s) => s.length), songs: localTracks.size }),
+  openMyTabs: () => setView("catalogue"),
+  openMusic: () => setView("music"),
+  storage: localStorage,
+});
+
+let savingOffline = false;
+
+/**
+ * Saves the Songsterr page shown now for offline use: the app shell captures the
+ * whole page (snapshot.rs). Saving it again replaces the earlier copy.
+ */
+async function saveForOffline() {
+  const page = shown;
+  const label = embed?.label;
+  if (!page || !isSongPage(page) || !label || savingOffline) return;
+  const track = sync.current;
+  savingOffline = true;
+  renderToolbar();
+  showBanner(`Saving “${escapeHtml(page.title)}” for offline… The page scrolls by itself while it is copied.`);
+  try {
+    const parts = parseSnapshot(await invoke<ArrayBuffer | number[]>("snapshot_webview", { label }));
+    // Remember the playing track when this page is its tab, so offline it opens by itself.
+    const forTrack = track && sync.best?.url === page.url ? trackKey(track) : null;
+    const saved = await (await offline()).save({ url: page.url, songId: page.songId, title: page.title, artist: page.artist, trackKey: forTrack }, parts);
+    const size = saved.parts.reduce((n, p) => n + p.size, 0);
+    showBanner(`Saved “${escapeHtml(saved.title)}” for offline (${formatSize(size)}). It's under <b>Offline</b> in the sidebar.`);
+  } catch (e) {
+    console.warn("saving for offline failed", e);
+    showBanner(`Couldn't save the page for offline: ${escapeHtml(String(e))}`, "warn");
+  } finally {
+    savingOffline = false;
+    renderToolbar();
+  }
+}
+
+/** The saved copy of `track`'s tab, if there is one. */
+async function savedFor(track: Track): Promise<SavedPage | null> {
+  try {
+    return findForTrack(await (await offline()).pages(), track, trackKey(track));
+  } catch {
+    return null;
+  }
+}
+
+function openSaved(id: number) {
+  view = "offline-page";
+  fretcam.close();
+  renderStage();
+  void offlineView.showPage(id);
+}
+
+/**
+ * Follow the playing song's tab. Without a connection (Songsterr unreachable, or
+ * the device offline) its saved copy opens instead, if there is one.
+ */
+async function followSongsterr(r: SongsterrResult) {
+  const track = sync.current;
+  const offlineNow = !navigator.onLine || sync.phase === "offline";
+  if (offlineNow && track && (view === "tab" || view === "offline-page")) {
+    const saved = await savedFor(track);
+    if (saved && sync.current === track) {
+      if (offlineView.current?.id !== saved.id) openSaved(saved.id);
+      showBanner(`You're offline: showing your saved copy of “${escapeHtml(saved.title)}”.`);
+      return;
+    }
+  }
+  await openSongsterr(r, "auto");
 }
 
 // ---- Songsterr viewer ------------------------------------------------------------
@@ -536,6 +628,12 @@ function renderToolbar() {
   el.fav.title = isFav ? "Remove from favorites" : "Save to favorites";
   el.fav2.innerHTML = `${icon(isFav ? "starFilled" : "star", 14)}<span>${isFav ? "Saved" : "Save"}</span>`;
   el.refresh.disabled = !embed?.isOpen || local;
+  const savable = !!embed?.isOpen && !!shown && isSongPage(shown) && !local && !savingOffline;
+  for (const b of [el.saveOffline, el.saveOffline2]) {
+    b.hidden = !embed;
+    b.disabled = !savable;
+    b.setAttribute("aria-busy", String(savingOffline));
+  }
   const ext = shown?.url ?? sync.best?.url ?? null;
   el.external.disabled = !ext;
   el.openSongsterr.disabled = !ext;
@@ -2054,6 +2152,7 @@ function bindTools() {
     if (url) void openExternal(url);
   };
   el.fav2.onclick = toggleFavoriteShown;
+  el.saveOffline2.onclick = () => void saveForOffline();
   el.importTab.onclick = () => showImport(sync.current);
   el.myTabs.onclick = () => setView("catalogue");
   el.toolsClose.onclick = () => dispatch("tools");
@@ -2083,6 +2182,7 @@ function bindChrome() {
   el.checkUpdates.onclick = () => void checkUpdatesNow();
   el.solos.onclick = () => setView(view === "solos" ? "tab" : "solos");
   el.fav.onclick = toggleFavoriteShown;
+  el.saveOffline.onclick = () => void saveForOffline();
   el.refresh.onclick = () => void embed?.reload();
   el.external.onclick = () => {
     const url = shown?.url ?? sync.best?.url;

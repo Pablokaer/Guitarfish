@@ -1,4 +1,5 @@
 mod localaudio;
+mod snapshot;
 mod songkey;
 mod songsterr;
 
@@ -46,7 +47,8 @@ pub fn run() {
             songsterr::songsterr_search,
             songkey::song_key,
             localaudio::local_audio_open,
-            localaudio::local_audio_read
+            localaudio::local_audio_read,
+            snapshot::snapshot_webview
         ])
         .setup(|_app| {
             #[cfg(target_os = "macos")]
