@@ -3457,7 +3457,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-nowplaying"
-version = "0.7.3"
+version = "0.7.4"
 dependencies = [
  "block2",
  "objc2-foundation",
