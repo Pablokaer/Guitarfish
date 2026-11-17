@@ -106,7 +106,7 @@ jobs:
       matrix:
         include:
           - name: macOS (universal)
-            os: macos-latest
+            os: macos-26 # by name, not macos-latest: see ci.yml
             args: --target universal-apple-darwin
             rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
             artifact: macos
