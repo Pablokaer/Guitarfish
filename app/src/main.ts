@@ -509,19 +509,31 @@ const offlineView = new OfflineView({
   elsewhere: () => ({ tabs: catalogue().then((c) => c.songs()).then((s) => s.length), songs: localTracks.size }),
   openMyTabs: () => setView("catalogue"),
   openMusic: () => setView("music"),
+  changed: () => void refreshSavedUrls(),
   storage: localStorage,
 });
 
 let savingOffline = false;
+/** URLs of the pages saved for offline: their save button shows "saved" and does nothing. */
+let savedUrls = new Set<string>();
+
+async function refreshSavedUrls() {
+  try {
+    savedUrls = new Set((await (await offline()).pages()).map((p) => p.url));
+  } catch {
+    /* the store can't be read: the buttons stay as they are */
+  }
+  renderToolbar();
+}
 
 /**
  * Saves the Songsterr page shown now for offline use: the app shell captures the
- * whole page (snapshot.rs). Saving it again replaces the earlier copy.
+ * whole page (snapshot.rs). A page is saved once: to save it again, delete it under Offline.
  */
 async function saveForOffline() {
   const page = shown;
   const label = embed?.label;
-  if (!page || !isSongPage(page) || !label || savingOffline) return;
+  if (!page || !isSongPage(page) || !label || savingOffline || savedUrls.has(page.url)) return;
   const track = sync.current;
   savingOffline = true;
   renderToolbar();
@@ -531,6 +543,7 @@ async function saveForOffline() {
     // Remember the playing track when this page is its tab, so offline it opens by itself.
     const forTrack = track && sync.best?.url === page.url ? trackKey(track) : null;
     const saved = await (await offline()).save({ url: page.url, songId: page.songId, title: page.title, artist: page.artist, trackKey: forTrack }, parts);
+    savedUrls.add(saved.url);
     const size = saved.parts.reduce((n, p) => n + p.size, 0);
     showBanner(`Saved “${escapeHtml(saved.title)}” for offline (${formatSize(size)}). It's under <b>Offline</b> in the sidebar.`);
   } catch (e) {
@@ -628,12 +641,20 @@ function renderToolbar() {
   el.fav.title = isFav ? "Remove from favorites" : "Save to favorites";
   el.fav2.innerHTML = `${icon(isFav ? "starFilled" : "star", 14)}<span>${isFav ? "Saved" : "Save"}</span>`;
   el.refresh.disabled = !embed?.isOpen || local;
-  const savable = !!embed?.isOpen && !!shown && isSongPage(shown) && !local && !savingOffline;
+  const songPage = !!embed?.isOpen && !!shown && isSongPage(shown) && !local;
+  const alreadySaved = songPage && savedUrls.has(shown!.url);
   for (const b of [el.saveOffline, el.saveOffline2]) {
     b.hidden = !embed;
-    b.disabled = !savable;
+    b.disabled = !songPage || savingOffline || alreadySaved;
     b.setAttribute("aria-busy", String(savingOffline));
   }
+  el.saveOffline.innerHTML = icon(alreadySaved ? "cloudCheck" : "cloudDown", 17);
+  el.saveOffline.title = alreadySaved
+    ? "Saved for offline. To save it again, delete it under Offline first."
+    : "Save for offline: a copy of this page that opens without a connection";
+  el.saveOffline.setAttribute("aria-label", alreadySaved ? "Saved for offline" : "Save for offline");
+  el.saveOffline2.innerHTML = `${icon(alreadySaved ? "cloudCheck" : "cloudDown", 14)}<span>${alreadySaved ? "Saved offline" : "Save for offline"}</span>`;
+  el.saveOffline2.title = el.saveOffline.title;
   const ext = shown?.url ?? sync.best?.url ?? null;
   el.external.disabled = !ext;
   el.openSongsterr.disabled = !ext;
@@ -2183,6 +2204,7 @@ function bindChrome() {
   el.solos.onclick = () => setView(view === "solos" ? "tab" : "solos");
   el.fav.onclick = toggleFavoriteShown;
   el.saveOffline.onclick = () => void saveForOffline();
+  void refreshSavedUrls();
   el.refresh.onclick = () => void embed?.reload();
   el.external.onclick = () => {
     const url = shown?.url ?? sync.best?.url;
