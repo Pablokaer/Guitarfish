@@ -18,6 +18,7 @@ use tauri::{AppHandle, Runtime};
 /// What a part of a saved page holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PartKind {
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     Png = 0,
     /// macOS only (WKWebView's createPDF).
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -77,12 +78,15 @@ pub const RESTORE_JS: &str = r#"(() => {
 })()"#;
 
 /// Strips' height on Windows, in CSS px: well under Chromium's texture limits.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub const STRIP: f64 = 4096.0;
 /// The page is never captured taller than this (CSS px), so a page that keeps
 /// growing can't make an endless capture.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub const MAX_HEIGHT: f64 = 120_000.0;
 
 /// The strips (top, height) that cover a page `height` CSS px tall.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn strips(height: f64) -> Vec<(f64, f64)> {
     let h = height.clamp(1.0, MAX_HEIGHT).ceil();
     let mut out = Vec::new();
