@@ -50,6 +50,25 @@ export const SONGSTERR: SongsterrResult[] = [
   { songId: 12, title: "Champagne Supernova", artist: "Oasis", instruments: ["Guitar"], url: "https://www.songsterr.com/a/wa/song?id=12" },
 ];
 
+/** A real 1×1 PNG, so a saved page's image actually loads. */
+export const PNG_1X1 = Uint8Array.from(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64"));
+
+/** `snapshot_webview`'s binary answer (snapshot.rs encode_parts) for PNG parts. */
+function snapshotContainer(parts: Uint8Array[]): Uint8Array {
+  const head = Buffer.alloc(9);
+  head.write("GFSN", 0, "ascii");
+  head[4] = 1;
+  head.writeUInt32LE(parts.length, 5);
+  const chunks: Buffer[] = [head];
+  for (const p of parts) {
+    const h = Buffer.alloc(5);
+    h[0] = 0;
+    h.writeUInt32LE(p.length, 1);
+    chunks.push(h, Buffer.from(p));
+  }
+  return Buffer.concat(chunks);
+}
+
 /** Settings that show the local (alphaTab) viewer instead of the Songsterr page. */
 export const LOCAL_VIEW = { "tabsync.settings": { version: 2, songsterrPanel: false } };
 
@@ -88,6 +107,8 @@ export class FakeTauri {
   files: Record<string, Uint8Array> = {};
   /** What the system file picker returns (plugin:dialog|open). */
   picked: string[] = [];
+  /** What `snapshot_webview` captures of the embedded page (PNG strips). */
+  snapshotParts: Uint8Array[] = [PNG_1X1];
   calls: Call[] = [];
 
   async install(page: Page): Promise<void> {
@@ -139,6 +160,8 @@ export class FakeTauri {
         return "0.4.0";
       case "plugin:dialog|open":
         return this.picked;
+      case "snapshot_webview":
+        return { base64: Buffer.from(snapshotContainer(this.snapshotParts)).toString("base64") };
       case "local_audio_open":
         return (args.paths as string[]).map((path) => {
           const name = path.split("/").pop()!;

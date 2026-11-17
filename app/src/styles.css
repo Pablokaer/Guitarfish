@@ -443,6 +443,25 @@ kbd { display: inline-block; min-width: 18px; padding: 1px 5px; border-radius: 4
 .playlist-rename input { flex: 1; min-width: 0; height: 34px; font-size: 16px; font-weight: 600; }
 .mp3-details { display: grid; gap: 8px; }
 
+/* Offline: saved Songsterr pages and their viewer */
+.offline-badge { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: 12px; font-size: 12px; color: var(--warn); background: rgb(245 184 74 / 0.12); border: 1px solid rgb(245 184 74 / 0.35); }
+.offline-intro { margin: -6px 0 16px; font-size: 12.5px; line-height: 1.5; }
+.offline-intro .icon { display: inline-block; vertical-align: -2px; }
+.offline-delete { margin-right: 10px; }
+.offline-also { margin-top: 8px; }
+.offline-links { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.offline-viewer { min-height: 100%; display: flex; flex-direction: column; }
+.offline-bar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 12px; background: var(--surface); border-bottom: 1px solid var(--border); }
+.offline-title { flex: 1; min-width: 160px; display: grid; gap: 1px; font-size: 12.5px; }
+.offline-title b, .offline-title span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.offline-title span { font-size: 11.5px; }
+.offline-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.offline-speed input { width: 90px; vertical-align: middle; }
+/* The copy as it was saved, on white like the page itself; --zoom scales it from the page's width. */
+.offline-sheet { --zoom: 1; flex: 1; padding: 12px; overflow-x: auto; background: var(--sheet); }
+.offline-sheet img { display: block; width: calc(100% * var(--zoom)); max-width: none; height: auto; margin: 0 auto; }
+.offline-sheet .offline-pdf { display: block; width: calc(100% * var(--zoom)); height: calc(100vh - 140px); border: 0; margin: 0 auto; }
+
 /* Solos: key, scale picker, the scale on the neck and as tab */
 .page-inner.solos { max-width: 1100px; display: grid; gap: 16px; }
 .solos .page-head { margin-bottom: 0; }

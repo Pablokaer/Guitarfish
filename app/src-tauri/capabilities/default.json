@@ -13,6 +13,7 @@
     "allow-song-key",
     "allow-local-audio-open",
     "allow-local-audio-read",
+    "allow-snapshot-webview",
     "core:webview:allow-create-webview",
     "core:webview:allow-set-webview-position",
     "core:webview:allow-set-webview-size",

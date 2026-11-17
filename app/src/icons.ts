@@ -43,6 +43,8 @@ const PATHS = {
   grip: '<circle fill="currentColor" stroke="none" cx="9" cy="6" r="1.4"/><circle fill="currentColor" stroke="none" cx="15" cy="6" r="1.4"/><circle fill="currentColor" stroke="none" cx="9" cy="12" r="1.4"/><circle fill="currentColor" stroke="none" cx="15" cy="12" r="1.4"/><circle fill="currentColor" stroke="none" cx="9" cy="18" r="1.4"/><circle fill="currentColor" stroke="none" cx="15" cy="18" r="1.4"/>',
   edit: '<path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z"/><path d="m14.5 7.5 3 3"/>',
   bars: '<path d="M6 20v-6M10 20V8M14 20v-9M18 20V5"/>',
+  cloudDown: '<path d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 9a4 4 0 0 1 .5 7.97"/><path d="M12 11v9"/><path d="m8.5 16.5 3.5 3.5 3.5-3.5"/>',
+  cloudOff: '<path d="m3 3 18 18"/><path d="M8.5 8.6A6 6 0 0 0 6.4 9.04 4.5 4.5 0 0 0 7 18h10"/><path d="M11 6.1A6 6 0 0 1 18 9a4 4 0 0 1 2.4 7"/>',
 } as const;
 
 export type IconName = keyof typeof PATHS;

@@ -3704,6 +3704,11 @@ dependencies = [
 name = "tabsync"
 version = "0.7.2"
 dependencies = [
+ "base64 0.22.1",
+ "block2",
+ "cairo-rs",
+ "objc2-foundation",
+ "objc2-web-kit",
  "serde",
  "serde_json",
  "tauri",
@@ -3715,6 +3720,9 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-updater",
  "ureq",
+ "webkit2gtk",
+ "webview2-com",
+ "windows 0.62.2",
 ]
 
 [[package]]

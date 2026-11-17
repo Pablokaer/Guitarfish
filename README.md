@@ -117,6 +117,7 @@ Guitarfish is one program. The only network traffic is the Songsterr search (and
   - `scales.ts` is the scale library of the Solos view (every scale as intervals) and lays a scale out on the neck: all notes, playable positions and ASCII tab.
   - `songkey.ts` looks up the playing song's key online (the `song_key` command); `key.ts` finds a key (Krumhansl–Schmuckler) from a chroma vector, built from a local tab's notes or from microphone spectra; `listen.ts` runs the microphone.
   - `solos.ts` renders the Solos view and remembers each song's key.
+  - `offline.ts` keeps the pages saved for offline use (IndexedDB) and finds the playing song's copy; `offlineview.ts` renders the Offline list and viewer.
   - Local MP3 player:
     - `playback.ts` (`Playback`) holds the mode, Spotify or local. Its `read()` is what the sync loop polls, so a local song goes through the same tab lookup as a Spotify one. Switching modes pauses the other player.
     - `localplayer.ts` (`LocalPlayer`) is the engine around one `<audio>` element: queue, play/pause/seek, volume and mute, speed (gliding over 300 ms, `preservesPitch`), the A–B loop, error recovery, releasing each file when the next one loads, and the saved session.
@@ -127,7 +128,7 @@ Guitarfish is one program. The only network traffic is the Songsterr search (and
     - `localfiles.ts` gets files by path on desktop (file picker, `local_audio_*` commands) and gives each track a playable URL.
     - `musicui.ts` has the pure logic of the Music pages: search, sort, times, the drag target and the playback keys.
     - `musicview.ts` renders the Music pages.
-  - Every module except `main.ts`, `musicview.ts`, `icons.ts`, `types.ts` and `listen.ts` (Web Audio) has unit tests.
+  - Every module except `main.ts`, `musicview.ts`, `offlineview.ts`, `icons.ts`, `types.ts` and `listen.ts` (Web Audio) has unit tests.
 
 ### Data on the device
 
@@ -209,6 +210,7 @@ guitarfish/
 │   │   ├── src/songsterr.rs        songsterr_search command (Songsterr's public search, links only)
 │   │   ├── src/songkey.rs          song_key command (a recording's key: ReccoBeats, Deezer for the ISRC)
 │   │   ├── src/localaudio.rs       local_audio_open/read commands (the music player's files on disk)
+│   │   ├── src/snapshot.rs         snapshot_webview command (a whole-page copy of the Songsterr view, for offline)
 │   │   ├── build.rs                app manifest: the app's commands need a permission
 │   │   └── permissions/            generated allow/deny permissions for the command
 │   └── plugins/tauri-plugin-nowplaying/
@@ -313,7 +315,12 @@ npm run tauri android build
   - Shortcuts are listed in the Tools sidebar and in the macOS *Layout* menu.
   - Hiding or resizing panels only moves the native Songsterr view; it never reloads the page.
 - Songsterr blocks iframes, so the panel is a native child webview laid over the window. That needs Tauri's `unstable` feature (enabled in `src-tauri/Cargo.toml`) and the webview permissions in `src-tauri/capabilities/default.json`.
-- The app only uses Songsterr's public search API for links; it never downloads or stores their tabs, and it doesn't modify their page.
+- **Offline copies (desktop).** *Save for offline* (toolbar, or *Current tab* in the Tools sidebar) keeps a copy of the Songsterr page you are viewing, for your own use without a connection (when travelling). The app shell captures the whole page, not just what is on screen (`src-tauri/src/snapshot.rs`): on Windows WebView2's DevTools protocol makes the viewport as tall as the page and captures it in PNG strips; on macOS WKWebView exports it as a PDF; on Linux WebKitGTK takes a full-document snapshot. Before capturing, a script expands the page's scroll areas and scrolls through it, so parts drawn only on screen are drawn; afterwards the page is put back as it was (it scrolls by itself for a few seconds).
+  - **Offline** in the navigation sidebar lists the saved pages (newest first, with their size; delete takes two clicks) and opens them in a viewer with zoom and auto-scroll at an adjustable speed, to play along. Saving a page again replaces its copy.
+  - Without a connection (Songsterr unreachable, or the device offline), following a song opens its saved copy by itself instead of an error page: the copy saved for that track, else one whose title and artist match.
+  - A copy is a picture of the page as it was: Songsterr's own player (playback, speed, loop, instruments) needs their servers and doesn't work in it. Imported tabs (*My tabs*) keep every tool offline.
+  - Copies live in the webview's IndexedDB (`guitarfish-offline`), on this device only. They are for personal use: Songsterr's tabs are licensed content, and the app saves only a page you open and ask to save, never in bulk.
+- Apart from those copies, the app only uses Songsterr's public search API for links, and it doesn't modify their page.
 
 ## Solos: scales in the song's key
 

@@ -43,6 +43,11 @@ export class EmbeddedPage {
     return this.view !== null;
   }
 
+  /** The native webview's label, while a page is open (the app shell captures it by label). */
+  get label(): string | null {
+    return this.view?.label ?? null;
+  }
+
   /** The URL last opened (Songsterr may have navigated away from it since). */
   get url(): string | null {
     return this._url;
